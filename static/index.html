@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Arb Lab — Italian football scanner</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<div class="wrap">
+
+  <header class="top">
+    <div class="brand">
+      <div class="mark" aria-hidden="true">A</div>
+      <div>
+        <h1>Arb Lab</h1>
+        <p>Italian football · automatic cross-book scanner</p>
+      </div>
+    </div>
+    <div class="top-right">
+      <span class="live" id="live"><i></i> LIVE</span>
+      <span class="provider" id="provider">Demo</span>
+      <span class="stamp" id="lastUpdate">waiting for first scan…</span>
+      <button class="btn" id="refresh" type="button">Refresh</button>
+    </div>
+  </header>
+
+  <div id="demoBanner" class="banner demo hidden">
+    <b>Demo mode.</b> Odds are simulated. For live data set <code>PROVIDER=theoddsapi</code> + <code>ODDS_API_KEY</code> (EU books) or <code>PROVIDER=oddsapiio</code> + <code>ODDS_API_IO_KEY</code> + <code>BOOKMAKERS=Sisal IT,Snai IT</code> in <code>.env</code>, then restart.
+  </div>
+  <div id="sourceNote" class="banner info hidden"></div>
+  <div id="errorBanner" class="banner error hidden"></div>
+
+  <section class="stats" aria-label="Summary">
+    <div class="stat"><span>Matches</span><b id="statEvents">—</b><small>Italian football</small></div>
+    <div class="stat"><span>Arbs</span><b id="statArbs">—</b><small id="arbsHint">S &lt; 1.000</small></div>
+    <div class="stat"><span>Best margin</span><b id="statBest">—</b><small id="bestHint">before rounding</small></div>
+    <div class="stat"><span>Next scan</span><b id="statNext">—</b><small id="pollLabel">—</small></div>
+    <div class="stat"><span>Quota</span><b id="statQuota">—</b><small id="quotaHint">API requests left</small></div>
+  </section>
+
+  <section class="controls" aria-label="Settings">
+    <div class="control">
+      <label for="bankroll">Bankroll (€)</label>
+      <input id="bankroll" type="number" min="1" step="10" inputmode="decimal" value="1000">
+    </div>
+    <div class="control">
+      <label for="threshold">Max S to take</label>
+      <input id="threshold" type="number" min="0.90" max="1.20" step="0.001" inputmode="decimal" value="0.985">
+      <div class="chips" id="presets">
+        <button class="chip" type="button" data-s="0.995">0.5%</button>
+        <button class="chip" type="button" data-s="0.985">1.5%</button>
+        <button class="chip" type="button" data-s="0.970">3%</button>
+      </div>
+    </div>
+    <div class="control grow">
+      <label for="search">Search</label>
+      <input id="search" type="search" placeholder="Inter, Milan, Serie A…" autocomplete="off">
+    </div>
+    <label class="switch" title="Ask the browser to notify you when a new arb appears">
+      <input id="notify" type="checkbox"> Browser alerts
+    </label>
+  </section>
+
+  <div class="league-chips" id="leagueChips" role="group" aria-label="League filter"></div>
+
+  <section class="section">
+    <div class="section-head">
+      <h2>Live opportunities</h2>
+      <span id="countArbs">—</span>
+    </div>
+    <div id="cards" class="cards"></div>
+    <div id="empty" class="empty hidden">
+      <b>No arbitrage right now.</b>
+      <span>The market is efficient at the moment. The scanner keeps polling; S must drop below 1.000 across different books.</span>
+    </div>
+    <div id="loading" class="empty">
+      <b>First scan in progress…</b>
+      <span>Fetching Italian football odds. This usually takes a few seconds.</span>
+    </div>
+  </section>
+
+  <section class="section" id="nearSection">
+    <div class="section-head">
+      <h2>Near misses</h2>
+      <span>1.000 ≤ S ≤ 1.020 — one price move away</span>
+    </div>
+    <div id="nearCards" class="cards compact"></div>
+  </section>
+
+  <section class="section">
+    <div class="section-head">
+      <h2>Alert history</h2>
+      <span>Deduplicated · last 30</span>
+    </div>
+    <div id="history" class="history"></div>
+  </section>
+
+  <footer>
+    <b>18+ · legal ADM operators only.</b> Outcome-independent is not risk-free: prices move, books limit or close accounts, settlement rules differ (extra time, retirements, dead heats, void conditions), and per-ticket caps apply. This tool only reads odds and does the math — it never places bets. Verify every leg is live and the rules match before staking. Not financial advice.
+  </footer>
+</div>
+<script src="/static/app.js"></script>
+</body>
+</html>
