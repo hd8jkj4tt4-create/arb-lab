@@ -1,0 +1,2 @@
+# Arb Lab has no third-party dependencies.
+# This file exists so Render's default `pip install -r requirements.txt` build succeeds.
