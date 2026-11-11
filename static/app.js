@@ -352,7 +352,7 @@ function predRow(fixture) {
   )).join('');
   const detail = fixture.expected_goals
     ? `xG ${fixture.expected_goals[0].toFixed(2)}–${fixture.expected_goals[1].toFixed(2)}`
-    : `proj. margin ${fixture.projected_margin > 0 ? '+' : ''}${Number(fixture.projected_margin).toFixed(1)}`;
+    : `proj. ${fixture.projected_score ? `${fixture.projected_score.home}–${fixture.projected_score.away}` : '—'} · margin ${fixture.projected_margin > 0 ? '+' : ''}${Number(fixture.projected_margin).toFixed(1)}`;
   const likely = fixture.likely_score
     ? ` · likely ${fixture.likely_score.score} (${plainPct(fixture.likely_score.probability, 0)})`
     : '';
@@ -377,6 +377,13 @@ function predRow(fixture) {
   const scorerLine = homeTop || awayTop
     ? `Scorers: ${homeTop || '—'} · ${awayTop || '—'}`
     : '';
+  const nbaTop = fixture.top_scorer || {};
+  const nbaName = (leader) => (leader && leader.name
+    ? `${leader.name} ${Number(leader.points_per_game).toFixed(1)} PPG`
+    : '—');
+  const nbaTopLine = nbaTop.home || nbaTop.away
+    ? `Top: ${nbaName(nbaTop.home)} · ${nbaName(nbaTop.away)}`
+    : '';
   const scorerList = (rows) => (rows && rows.length
     ? `<ul>${rows.map((row) => `<li>${esc(row.name)} <span>${row.goals}/${row.appearances} · ${plainPct(row.probability, 0)}</span></li>`).join('')}</ul>`
     : '<p class="recent-empty">No scorer data.</p>');
@@ -394,6 +401,7 @@ function predRow(fixture) {
       <div class="pred-sub">${esc(detail)}${esc(likely)}${sample ? ` · ${esc(sample)}` : ''}</div>
       ${markets ? `<div class="pred-markets">${esc(markets)}</div>` : ''}
       ${scorerLine ? `<div class="pred-scorers" title="Probable anytime scorers">${esc(scorerLine)}</div>` : ''}
+      ${nbaTopLine ? `<div class="pred-scorers" title="Team points-per-game leader">${esc(nbaTopLine)}</div>` : ''}
     </div>
     <div class="pred-probs">
       <div class="prob-bar">${bar}</div>
@@ -404,10 +412,14 @@ function predRow(fixture) {
       <span title="${esc(formTitle(fixture.away, recent.away))}"><em>A</em>${formBadges(fixture.form && fixture.form.away)}</span>
     </div>
     <details class="pred-recent">
-      <summary>${fixture.scorers ? 'Scorers, exact results &amp; stats' : 'Exact results &amp; stats'}</summary>
+      <summary>${fixture.scorers || fixture.top_scorer ? 'Scorers, exact results &amp; stats' : 'Exact results &amp; stats'}</summary>
       ${fixture.scorers ? `<div class="pred-scorer-box">
         <div><b>${esc(fixture.home)}</b>${scorerList(scorers.home)}</div>
         <div><b>${esc(fixture.away)}</b>${scorerList(scorers.away)}</div>
+      </div>` : ''}
+      ${fixture.top_scorer ? `<div class="pred-scorer-box">
+        <div><b>${esc(fixture.home)}</b><ul>${nbaName(nbaTop.home) !== '—' ? `<li>${esc(nbaTop.home.name)} <span>${Number(nbaTop.home.points_per_game).toFixed(1)} PPG</span></li>` : '<li>—</li>'}</ul></div>
+        <div><b>${esc(fixture.away)}</b><ul>${nbaName(nbaTop.away) !== '—' ? `<li>${esc(nbaTop.away.name)} <span>${Number(nbaTop.away.points_per_game).toFixed(1)} PPG</span></li>` : '<li>—</li>'}</ul></div>
       </div>` : ''}
       <div class="pred-recent-grid">
         <div><b>${esc(fixture.home)}</b>${recentList(recent.home)}</div>

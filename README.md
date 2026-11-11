@@ -38,7 +38,8 @@ Serie A, La Liga, Champions League and the NBA.
   probable anytime scorers, recent form and the sample size for each team.
 - **NBA:** time-weighted point-margin ratings plus home-court advantage,
   converted to a win probability with a normal approximation. Output: `1`, `2`,
-  projected margin and recent form.
+  projected exact score, projected margin, each team's top points-per-game
+  scorer and recent form.
 - **Exact results and stats:** for football, each fixture shows its most likely
   scoreline and the last-10-match averages for corners won and fouls committed.
   NBA rows add projected made three-pointers. Expanding a fixture lists the
@@ -47,8 +48,9 @@ Serie A, La Liga, Champions League and the NBA.
   win model.
 - **Data:** [ESPN's public scoreboard API](https://site.api.espn.com/apis/site/v2/sports).
   No key is required. Football corners/fouls and NBA 3PM come from the same
-  scoreboard; NBA fouls and football scorer stats need extra endpoints and are
-  cached in `data/espn_stats.json` and `data/espn_rosters.json`.
+  scoreboard; NBA fouls, NBA scoring leaders and football scorer stats need
+  extra endpoints and are cached in `data/espn_stats.json`,
+  `data/espn_nba_leaders.json` and `data/espn_rosters.json`.
 - **Validation:** each competition is refitted on an earlier training window
   and scored on a holdout period. The dashboard shows holdout accuracy, log loss
   and the number of test matches. This is a sanity check, not a promise.

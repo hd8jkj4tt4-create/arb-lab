@@ -8,6 +8,7 @@ from predictions import (
     NbaModel,
     ORDER,
     _fixtures_for,
+    _nba_season_year,
     _parse_events,
     build_matches,
     fit_football,
@@ -128,6 +129,18 @@ class NbaModelTests(unittest.TestCase):
     def test_home_advantage_is_positive(self):
         model = fit_nba(nba_matches(), NOW, 120)
         self.assertGreater(model.home_court, 0.0)
+
+    def test_projected_score_matches_the_margin(self):
+        model = fit_nba(nba_matches(), NOW, 120)
+        score = model.projected_score("A", "D")
+        self.assertGreater(score["home"], score["away"])
+        margin = model.projected_margin("A", "D")
+        self.assertAlmostEqual(score["home"] - score["away"], margin, delta=1.5)
+        self.assertGreater(score["home"] + score["away"], 150)
+
+    def test_nba_season_year_crosses_the_summer(self):
+        self.assertEqual(_nba_season_year(datetime(2026, 11, 11, tzinfo=timezone.utc)), 2027)
+        self.assertEqual(_nba_season_year(datetime(2027, 2, 1, tzinfo=timezone.utc)), 2027)
 
 
 class ParsingTests(unittest.TestCase):

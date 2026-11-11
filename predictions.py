@@ -39,7 +39,9 @@ ROOT = Path(__file__).resolve().parent
 CACHE_PATH = ROOT / "data" / "predictions.json"
 STATS_CACHE_PATH = ROOT / "data" / "espn_stats.json"
 ROSTER_CACHE_PATH = ROOT / "data" / "espn_rosters.json"
+NBA_LEADERS_CACHE_PATH = ROOT / "data" / "espn_nba_leaders.json"
 ESPN = "https://site.api.espn.com/apis/site/v2/sports"
+ESPN_CORE = "https://sports.core.api.espn.com/v2/sports/basketball/leagues/nba"
 
 # The model uses a 0..10 score grid for football. The factorial table keeps the
 # Poisson probability loop cheap.
@@ -448,6 +450,98 @@ def enrich_scorers(
     return out
 
 
+def _load_nba_leader_cache() -> dict[str, dict[str, Any]]:
+    try:
+        data = json.loads(NBA_LEADERS_CACHE_PATH.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def _save_nba_leader_cache(cache: dict[str, dict[str, Any]]) -> None:
+    NBA_LEADERS_CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    tmp = NBA_LEADERS_CACHE_PATH.with_suffix(".tmp")
+    tmp.write_text(json.dumps(cache, indent=0, sort_keys=True), encoding="utf-8")
+    os.replace(tmp, NBA_LEADERS_CACHE_PATH)
+
+
+def _nba_season_year(now: datetime) -> int:
+    """ESPN labels the 2026-27 NBA season as 2027."""
+    return now.year + (1 if now.month >= 7 else 0)
+
+
+def _fetch_nba_top_scorer(team_id: str, season_year: int) -> dict[str, Any] | None:
+    base = f"{ESPN_CORE}/seasons/{season_year}/types/2"
+    data = fetch_json(f"{base}/teams/{team_id}/leaders")
+    categories = data.get("categories") if isinstance(data, dict) else None
+    category = next(
+        (item for item in categories or [] if item.get("name") == "pointsPerGame"),
+        None,
+    )
+    leaders = (category or {}).get("leaders") or []
+    if not leaders:
+        return None
+    leader = leaders[0]
+    points = _parse_number(leader.get("value", leader.get("displayValue")))
+    if points is None:
+        return None
+    athlete_ref = ((leader.get("athlete") or {}).get("$ref") or "")
+    name = ""
+    if athlete_ref:
+        athlete = fetch_json(athlete_ref)
+        name = str(athlete.get("displayName") or athlete.get("fullName") or "").strip()
+    if not name:
+        return None
+    return {"name": name, "points_per_game": round(points, 1)}
+
+
+def load_nba_top_scorers(
+    team_ids: set[str],
+    now: datetime,
+    warnings: list[str],
+    max_age: int = 6 * 3600,
+) -> dict[str, dict[str, Any]]:
+    """Top points-per-game scorer for each NBA team, cached for a few hours."""
+    cache = _load_nba_leader_cache()
+    season_year = _nba_season_year(now)
+    timestamp = time.time()
+    cache_keys = {team_id: f"{season_year}:{team_id}" for team_id in team_ids if team_id}
+    needed = [
+        team_id
+        for team_id, cache_key in cache_keys.items()
+        if cache_key not in cache
+        or timestamp - float(cache[cache_key].get("fetched") or 0) > max_age
+    ]
+    if needed:
+        fetched: dict[str, dict[str, Any]] = {}
+        with ThreadPoolExecutor(max_workers=6) as pool:
+            futures = {
+                pool.submit(_fetch_nba_top_scorer, team_id, season_year): team_id
+                for team_id in needed
+            }
+            for future in as_completed(futures):
+                team_id = futures[future]
+                try:
+                    scorer = future.result()
+                except Exception as exc:  # noqa: BLE001 - leaders are best effort
+                    warnings.append(f"NBA top scorer {team_id}: {exc}")
+                    continue
+                if scorer:
+                    fetched[cache_keys[team_id]] = {"fetched": timestamp, **scorer}
+        if fetched:
+            cache.update(fetched)
+            _save_nba_leader_cache(cache)
+
+    return {
+        team_id: {
+            "name": cache[cache_keys[team_id]].get("name"),
+            "points_per_game": cache[cache_keys[team_id]].get("points_per_game"),
+        }
+        for team_id in team_ids
+        if team_id and cache_keys.get(team_id) in cache
+    }
+
+
 def _parse_date(value: Any) -> datetime | None:
     if not isinstance(value, str) or not value.strip():
         return None
@@ -817,6 +911,9 @@ class NbaModel:
     teams: int
     matches: int
     half_life_days: int
+    points_for: dict[str, float]
+    points_against: dict[str, float]
+    league_points: float
 
     def projected_margin(self, home: str, away: str) -> float:
         return self.home_court + self.ratings.get(home, 0.0) - self.ratings.get(away, 0.0)
@@ -824,6 +921,20 @@ class NbaModel:
     def probabilities(self, home: str, away: str) -> dict[str, float]:
         probability = normal_cdf(self.projected_margin(home, away) / self.sigma)
         return {"1": probability, "2": 1.0 - probability}
+
+    def projected_score(self, home: str, away: str) -> dict[str, int]:
+        """Expected final score from recent scoring rates and the fitted margin."""
+        home_for = self.points_for.get(home, self.league_points)
+        away_for = self.points_for.get(away, self.league_points)
+        home_against = self.points_against.get(home, self.league_points)
+        away_against = self.points_against.get(away, self.league_points)
+        home_base = (home_for + away_against) / 2.0 + self.home_court / 2.0
+        away_base = (away_for + home_against) / 2.0 - self.home_court / 2.0
+        shift = (self.projected_margin(home, away) - (home_base - away_base)) / 2.0
+        return {
+            "home": int(round(min(170.0, max(60.0, home_base + shift)))),
+            "away": int(round(min(170.0, max(60.0, away_base - shift)))),
+        }
 
 
 def fit_nba(
@@ -886,6 +997,36 @@ def fit_nba(
     sigma = math.sqrt(residual / total_weight)
     sigma = max(9.0, min(14.5, sigma))
 
+    scored = {team: 0.0 for team in teams}
+    allowed = {team: 0.0 for team in teams}
+    team_weight = {team: 0.0 for team in teams}
+    point_weight = 0.0
+    point_total = 0.0
+    for match in matches:
+        weight = _time_weight(match["commence"], reference, half_life_days)
+        home, away = match["home"], match["away"]
+        home_points, away_points = float(match["home_score"]), float(match["away_score"])
+        scored[home] += weight * home_points
+        scored[away] += weight * away_points
+        allowed[home] += weight * away_points
+        allowed[away] += weight * home_points
+        team_weight[home] += weight
+        team_weight[away] += weight
+        point_weight += weight * 2.0
+        point_total += weight * (home_points + away_points)
+
+    points_for = {
+        team: scored[team] / team_weight[team]
+        for team in teams
+        if team_weight[team] > 0
+    }
+    points_against = {
+        team: allowed[team] / team_weight[team]
+        for team in teams
+        if team_weight[team] > 0
+    }
+    league_points = point_total / point_weight if point_weight > 0 else 110.0
+
     return NbaModel(
         ratings=ratings,
         home_court=home_court,
@@ -893,6 +1034,9 @@ def fit_nba(
         teams=len(teams),
         matches=len(matches),
         half_life_days=half_life_days,
+        points_for=points_for,
+        points_against=points_against,
+        league_points=league_points,
     )
 
 
@@ -1103,9 +1247,16 @@ def build_competition(spec: Competition, now: datetime) -> dict[str, Any]:
     fixtures = _fixtures_for(events, spec, now)
 
     stats_window = 5 if spec.sport == "basketball" else 10
+    top_scorers: dict[str, dict[str, Any]] = {}
     if fixtures and spec.sport == "basketball":
         fixture_teams = {event["home"] for event in fixtures} | {event["away"] for event in fixtures}
         enrich_nba_fouls(matches, fixture_teams, warnings, window=stats_window)
+        top_scorers = load_nba_top_scorers(
+            {event.get("home_id") or "" for event in fixtures}
+            | {event.get("away_id") or "" for event in fixtures},
+            now,
+            warnings,
+        )
 
     if not matches:
         raise DataError(f"no completed {spec.name} results in the last {spec.lookback_days} days")
@@ -1164,6 +1315,11 @@ def build_competition(spec: Competition, now: datetime) -> dict[str, Any]:
             row["likely_score"] = model.most_likely_score(home, away)
         else:
             row["projected_margin"] = round(model.projected_margin(home, away), 2)
+            row["projected_score"] = model.projected_score(home, away)
+            home_leader = top_scorers.get(event.get("home_id") or "")
+            away_leader = top_scorers.get(event.get("away_id") or "")
+            if home_leader or away_leader:
+                row["top_scorer"] = {"home": home_leader, "away": away_leader}
         row["projected"] = projected_stats(matches, home, away, stats_window)
         if scorers:
             row["scorers"] = scorers.get(event["id"], {"home": [], "away": []})
@@ -1245,8 +1401,9 @@ def build_snapshot(
         "model_note": (
             "Trained only on finished matches with final scores (ESPN). "
             "Football: time-weighted Dixon-Coles Poisson. NBA: time-weighted "
-            "point-margin ratings. Corners/fouls and made 3s are recent averages; "
-            "scorers are goal-share estimates. No lineups, injuries or market prices."
+            "point-margin ratings, projected score and top scorer. Corners/fouls "
+            "and made 3s are recent averages; scorers are goal-share estimates. "
+            "No lineups, injuries or market prices."
         ),
         "competitions": competitions,
         "warnings": warnings,
