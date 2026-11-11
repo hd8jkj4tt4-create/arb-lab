@@ -6,6 +6,7 @@ from predictions import (
     COMPETITIONS,
     FootballModel,
     NbaModel,
+    ORDER,
     _fixtures_for,
     _parse_events,
     build_matches,
@@ -14,6 +15,7 @@ from predictions import (
     form_string,
     month_keys,
     normal_cdf,
+    probable_scorers,
     projected_stats,
     recent_results,
     score_matrix,
@@ -129,6 +131,11 @@ class NbaModelTests(unittest.TestCase):
 
 
 class ParsingTests(unittest.TestCase):
+    def test_serie_a_is_in_win_probabilities(self):
+        self.assertIn("serie_a", ORDER)
+        self.assertEqual(COMPETITIONS["serie_a"].espn, "soccer/ita.1")
+        self.assertEqual(COMPETITIONS["serie_a"].name, "Serie A")
+
     def test_month_keys(self):
         keys = month_keys(datetime(2025, 11, 1, tzinfo=timezone.utc), datetime(2026, 2, 1, tzinfo=timezone.utc))
         self.assertEqual(keys, ["202511", "202512", "202601", "202602"])
@@ -175,6 +182,7 @@ class ParsingTests(unittest.TestCase):
                                 "statistics": [
                                     {"name": "wonCorners", "displayValue": "7"},
                                     {"name": "foulsCommitted", "displayValue": "11"},
+                                    {"name": "threePointFieldGoalsMade", "displayValue": "5"},
                                 ],
                             },
                             {
@@ -184,6 +192,7 @@ class ParsingTests(unittest.TestCase):
                                 "statistics": [
                                     {"name": "wonCorners", "displayValue": "4"},
                                     {"name": "foulsCommitted", "displayValue": "14"},
+                                    {"name": "threePointFieldGoalsMade", "displayValue": "3"},
                                 ],
                             },
                         ],
@@ -196,6 +205,8 @@ class ParsingTests(unittest.TestCase):
         self.assertEqual(parsed[0]["away_corners"], 4)
         self.assertEqual(parsed[0]["home_fouls"], 11)
         self.assertEqual(parsed[0]["away_fouls"], 14)
+        self.assertEqual(parsed[0]["home_threes"], 5)
+        self.assertEqual(parsed[0]["away_threes"], 3)
 
     def test_preseason_nba_is_ignored(self):
         raw = [
@@ -259,6 +270,32 @@ class FormTests(unittest.TestCase):
         projected = projected_stats(matches, "A", "B")
         self.assertEqual(projected["corners"]["total"], 11)
         self.assertEqual(projected["fouls"]["total"], 25)
+
+    def test_probable_scorers_follow_goal_share(self):
+        players = [
+            {"name": "Striker", "goals": 8, "appearances": 10, "shots_on_target": 15},
+            {"name": "Winger", "goals": 2, "appearances": 10, "shots_on_target": 6},
+        ]
+        scorers = probable_scorers(players, 1.5)
+        self.assertEqual([row["name"] for row in scorers], ["Striker", "Winger"])
+        self.assertAlmostEqual(scorers[0]["probability"], 0.6988, places=3)
+        self.assertGreater(scorers[0]["probability"], scorers[1]["probability"])
+
+    def test_nba_threes_are_projected(self):
+        matches = [
+            {
+                "home": "A",
+                "away": "B",
+                "home_score": 110,
+                "away_score": 100,
+                "home_threes": 14,
+                "away_threes": 10,
+                "commence": NOW,
+            }
+        ]
+        projected = projected_stats(matches, "A", "B", limit=5)
+        self.assertEqual(projected["threes"]["total"], 24)
+        self.assertEqual(team_averages(matches, "A", limit=5)["threes"], 14)
 
 
 def event(state, completed, commence, home_score=None, away_score=None):

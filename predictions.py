@@ -38,6 +38,7 @@ log = logging.getLogger("arb-lab.predictions")
 ROOT = Path(__file__).resolve().parent
 CACHE_PATH = ROOT / "data" / "predictions.json"
 STATS_CACHE_PATH = ROOT / "data" / "espn_stats.json"
+ROSTER_CACHE_PATH = ROOT / "data" / "espn_rosters.json"
 ESPN = "https://site.api.espn.com/apis/site/v2/sports"
 
 # The model uses a 0..10 score grid for football. The factorial table keeps the
@@ -68,6 +69,19 @@ class Competition:
 
 
 COMPETITIONS: dict[str, Competition] = {
+    "serie_a": Competition(
+        key="serie_a",
+        name="Serie A",
+        sport="football",
+        espn="soccer/ita.1",
+        lookback_days=730,
+        half_life_days=300,
+        validation_days=60,
+        min_train=100,
+        min_test=20,
+        fixture_horizon_days=14,
+        fixture_limit=8,
+    ),
     "la_liga": Competition(
         key="la_liga",
         name="La Liga",
@@ -109,7 +123,7 @@ COMPETITIONS: dict[str, Competition] = {
     ),
 }
 
-ORDER = ("la_liga", "champions_league", "nba")
+ORDER = ("serie_a", "la_liga", "champions_league", "nba")
 
 
 # ---------------------------------------------------------------------------
@@ -295,6 +309,145 @@ def enrich_nba_fouls(
         match["away_fouls"] = stats.get("away")
 
 
+def _load_roster_cache() -> dict[str, dict[str, Any]]:
+    try:
+        data = json.loads(ROSTER_CACHE_PATH.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def _save_roster_cache(cache: dict[str, dict[str, Any]]) -> None:
+    ROSTER_CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    tmp = ROSTER_CACHE_PATH.with_suffix(".tmp")
+    tmp.write_text(json.dumps(cache, indent=0, sort_keys=True), encoding="utf-8")
+    os.replace(tmp, ROSTER_CACHE_PATH)
+
+
+def _fetch_roster_players(espn: str, team_id: str) -> list[dict[str, Any]]:
+    """Season goals/appearances for one team from ESPN's roster endpoint."""
+    data = fetch_json(f"{ESPN}/{espn}/teams/{team_id}/roster")
+    players: list[dict[str, Any]] = []
+    for athlete in data.get("athletes") or []:
+        categories = (
+            ((athlete.get("statistics") or {}).get("splits") or {}).get("categories")
+            or []
+        )
+        values: dict[str, float] = {}
+        for category in categories:
+            for stat in category.get("stats") or []:
+                name = str(stat.get("name") or "")
+                value = _parse_number(stat.get("value", stat.get("displayValue")))
+                if name and value is not None:
+                    values[name] = value
+        goals = values.get("totalGoals", values.get("goals", 0.0))
+        appearances = values.get("appearances", 0.0)
+        if goals <= 0 or appearances <= 0:
+            continue
+        players.append(
+            {
+                "name": str(athlete.get("displayName") or athlete.get("fullName") or "").strip(),
+                "goals": int(goals),
+                "appearances": int(appearances),
+                "shots_on_target": int(values.get("shotsOnTarget", 0.0)),
+            }
+        )
+    players.sort(key=lambda player: (player["goals"], player["shots_on_target"]), reverse=True)
+    return [player for player in players if player["name"]]
+
+
+def load_rosters(
+    spec: Competition,
+    team_ids: set[str],
+    warnings: list[str],
+    max_age: int = 6 * 3600,
+) -> dict[str, list[dict[str, Any]]]:
+    """Roster scoring stats, cached for a few hours to avoid refetching."""
+    cache = _load_roster_cache()
+    now = time.time()
+    cache_keys = {team_id: f"{spec.espn}:{team_id}" for team_id in team_ids if team_id}
+    needed = [
+        team_id
+        for team_id, cache_key in cache_keys.items()
+        if cache_key not in cache
+        or now - float(cache[cache_key].get("fetched") or 0) > max_age
+    ]
+    if needed:
+        fetched: dict[str, dict[str, Any]] = {}
+        with ThreadPoolExecutor(max_workers=6) as pool:
+            futures = {
+                pool.submit(_fetch_roster_players, spec.espn, team_id): team_id
+                for team_id in needed
+            }
+            for future in as_completed(futures):
+                team_id = futures[future]
+                try:
+                    players = future.result()
+                except Exception as exc:  # noqa: BLE001 - scorers are best effort
+                    warnings.append(f"{spec.name} roster {team_id}: {exc}")
+                    continue
+                fetched[cache_keys[team_id]] = {"fetched": now, "players": players}
+        if fetched:
+            cache.update(fetched)
+            _save_roster_cache(cache)
+
+    return {
+        team_id: list((cache.get(cache_keys[team_id]) or {}).get("players") or [])
+        for team_id in team_ids
+        if team_id
+    }
+
+
+def probable_scorers(
+    players: list[dict[str, Any]],
+    expected_goals: float,
+    limit: int = 3,
+) -> list[dict[str, Any]]:
+    """Anytime-scorer probabilities from each player's share of team goals."""
+    total_goals = sum(player["goals"] for player in players)
+    if total_goals <= 0 or expected_goals <= 0:
+        return []
+    rows: list[dict[str, Any]] = []
+    for player in players:
+        share = player["goals"] / total_goals
+        expected = expected_goals * share
+        probability = 1.0 - math.exp(-expected)
+        rows.append(
+            {
+                "name": player["name"],
+                "goals": player["goals"],
+                "appearances": player["appearances"],
+                "probability": round(min(0.95, probability), 4),
+            }
+        )
+    rows.sort(key=lambda row: row["probability"], reverse=True)
+    return rows[:limit]
+
+
+def enrich_scorers(
+    spec: Competition,
+    fixtures: list[dict[str, Any]],
+    model: "FootballModel",
+    warnings: list[str],
+) -> dict[str, dict[str, Any]]:
+    """Add probable scorers for each football fixture."""
+    team_ids = {
+        team_id
+        for event in fixtures
+        for team_id in (event.get("home_id"), event.get("away_id"))
+        if team_id
+    }
+    rosters = load_rosters(spec, team_ids, warnings)
+    out: dict[str, dict[str, Any]] = {}
+    for event in fixtures:
+        home_rate, away_rate = model.expected_goals(event["home"], event["away"])
+        out[event["id"]] = {
+            "home": probable_scorers(rosters.get(event.get("home_id") or "", []), home_rate),
+            "away": probable_scorers(rosters.get(event.get("away_id") or "", []), away_rate),
+        }
+    return out
+
+
 def _parse_date(value: Any) -> datetime | None:
     if not isinstance(value, str) or not value.strip():
         return None
@@ -333,6 +486,7 @@ def _parse_number(value: Any) -> float | None:
 # ESPN uses different stat names for the same concept across sports.
 _FOUL_KEYS = ("foulsCommitted", "fouls", "foulsTotal", "teamFouls")
 _CORNER_KEYS = ("wonCorners", "corners", "cornerKicks", "totalCorners")
+_THREE_KEYS = ("threePointFieldGoalsMade", "threePointGoalsMade", "threePointersMade")
 
 
 def _side_stat(side: dict[str, Any], keys: tuple[str, ...]) -> float | None:
@@ -385,6 +539,8 @@ def _parse_events(raw: Iterable[dict[str, Any]], spec: Competition) -> list[dict
                 "league": spec.name,
                 "home": home_name,
                 "away": away_name,
+                "home_id": str((home.get("team") or {}).get("id") or ""),
+                "away_id": str((away.get("team") or {}).get("id") or ""),
                 "commence": commence,
                 "home_score": _parse_score(home.get("score")),
                 "away_score": _parse_score(away.get("score")),
@@ -392,6 +548,8 @@ def _parse_events(raw: Iterable[dict[str, Any]], spec: Competition) -> list[dict
                 "away_fouls": _side_stat(away, _FOUL_KEYS),
                 "home_corners": _side_stat(home, _CORNER_KEYS),
                 "away_corners": _side_stat(away, _CORNER_KEYS),
+                "home_threes": _side_stat(home, _THREE_KEYS),
+                "away_threes": _side_stat(away, _THREE_KEYS),
                 "completed": completed,
                 "state": state,
                 "season_type": season_type,
@@ -825,10 +983,13 @@ def recent_results(team: str, matches: list[dict[str, Any]], limit: int = 5) -> 
         extras: list[str] = []
         corners = _team_stat(match, team, "corners")
         fouls = _team_stat(match, team, "fouls")
+        threes = _team_stat(match, team, "threes")
         if corners is not None:
             extras.append(f"{_fmt_stat(corners)} corners")
         if fouls is not None:
             extras.append(f"{_fmt_stat(fouls)} fouls")
+        if threes is not None:
+            extras.append(f"{_fmt_stat(threes)} 3PM")
         suffix = f" · {', '.join(extras)}" if extras else ""
         rows.append(f"{result} {scored}-{conceded} vs {opponent} ({date}){suffix}")
         if len(rows) >= limit:
@@ -844,6 +1005,7 @@ def team_averages(
     """Average corners won and fouls committed over a team's last matches."""
     fouls: list[float] = []
     corners: list[float] = []
+    threes: list[float] = []
     seen = 0
     for match in reversed(matches):
         if match["home"] != team and match["away"] != team:
@@ -851,18 +1013,23 @@ def team_averages(
         seen += 1
         foul = _team_stat(match, team, "fouls")
         corner = _team_stat(match, team, "corners")
+        three = _team_stat(match, team, "threes")
         if foul is not None:
             fouls.append(foul)
         if corner is not None:
             corners.append(corner)
+        if three is not None:
+            threes.append(three)
         if seen >= limit:
             break
     return {
         "matches": seen,
         "fouls": round(sum(fouls) / len(fouls), 2) if fouls else None,
         "corners": round(sum(corners) / len(corners), 2) if corners else None,
+        "threes": round(sum(threes) / len(threes), 2) if threes else None,
         "fouls_sample": len(fouls),
         "corners_sample": len(corners),
+        "threes_sample": len(threes),
     }
 
 
@@ -879,7 +1046,7 @@ def projected_stats(
         "window": limit,
         "sample": min(home_avg["matches"], away_avg["matches"]),
     }
-    for key in ("corners", "fouls"):
+    for key in ("corners", "fouls", "threes"):
         left, right = home_avg[key], away_avg[key]
         out[key] = {
             "home": left,
@@ -952,6 +1119,10 @@ def build_competition(spec: Competition, now: datetime) -> dict[str, Any]:
         validation = validate_nba(matches, spec)
         model_label = "Point-margin ratings"
 
+    scorers: dict[str, dict[str, Any]] = {}
+    if isinstance(model, FootballModel) and fixtures:
+        scorers = enrich_scorers(spec, fixtures, model, warnings)
+
     if len(matches) < 60:
         warnings.append(f"small training sample ({len(matches)} matches)")
 
@@ -994,6 +1165,8 @@ def build_competition(spec: Competition, now: datetime) -> dict[str, Any]:
         else:
             row["projected_margin"] = round(model.projected_margin(home, away), 2)
         row["projected"] = projected_stats(matches, home, away, stats_window)
+        if scorers:
+            row["scorers"] = scorers.get(event["id"], {"home": [], "away": []})
         fixture_rows.append(row)
 
     if not fixture_rows:
@@ -1072,8 +1245,8 @@ def build_snapshot(
         "model_note": (
             "Trained only on finished matches with final scores (ESPN). "
             "Football: time-weighted Dixon-Coles Poisson. NBA: time-weighted "
-            "point-margin ratings. Corners and fouls are last-10-match averages, "
-            "not model outputs. No lineups, injuries or market prices."
+            "point-margin ratings. Corners/fouls and made 3s are recent averages; "
+            "scorers are goal-share estimates. No lineups, injuries or market prices."
         ),
         "competitions": competitions,
         "warnings": warnings,

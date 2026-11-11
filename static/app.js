@@ -364,7 +364,22 @@ function predRow(fixture) {
   const fouls = projected.fouls && projected.fouls.total != null
     ? `fouls ~${Number(projected.fouls.total).toFixed(1)}`
     : '';
-  const markets = [corners, fouls].filter(Boolean).join(' · ');
+  const threes = projected.threes && projected.threes.total != null
+    ? `3PM ~${Number(projected.threes.total).toFixed(1)}`
+    : '';
+  const markets = [corners, fouls, threes].filter(Boolean).join(' · ');
+  const scorers = fixture.scorers || {};
+  const topScorer = (rows) => (rows && rows.length
+    ? `${rows[0].name} ${plainPct(rows[0].probability, 0)}`
+    : '');
+  const homeTop = topScorer(scorers.home);
+  const awayTop = topScorer(scorers.away);
+  const scorerLine = homeTop || awayTop
+    ? `Scorers: ${homeTop || '—'} · ${awayTop || '—'}`
+    : '';
+  const scorerList = (rows) => (rows && rows.length
+    ? `<ul>${rows.map((row) => `<li>${esc(row.name)} <span>${row.goals}/${row.appearances} · ${plainPct(row.probability, 0)}</span></li>`).join('')}</ul>`
+    : '<p class="recent-empty">No scorer data.</p>');
   const recent = fixture.recent || {};
   const recentList = (rows) => (rows && rows.length
     ? `<ul>${rows.map((row) => `<li>${esc(row)}</li>`).join('')}</ul>`
@@ -378,6 +393,7 @@ function predRow(fixture) {
       <div class="pred-match"><a href="${esc(fixture.espn_url || '#')}" target="_blank" rel="noopener noreferrer">${esc(fixture.home)} <span>vs</span> ${esc(fixture.away)}</a></div>
       <div class="pred-sub">${esc(detail)}${esc(likely)}${sample ? ` · ${esc(sample)}` : ''}</div>
       ${markets ? `<div class="pred-markets">${esc(markets)}</div>` : ''}
+      ${scorerLine ? `<div class="pred-scorers" title="Probable anytime scorers">${esc(scorerLine)}</div>` : ''}
     </div>
     <div class="pred-probs">
       <div class="prob-bar">${bar}</div>
@@ -388,7 +404,11 @@ function predRow(fixture) {
       <span title="${esc(formTitle(fixture.away, recent.away))}"><em>A</em>${formBadges(fixture.form && fixture.form.away)}</span>
     </div>
     <details class="pred-recent">
-      <summary>Exact results, corners &amp; fouls</summary>
+      <summary>${fixture.scorers ? 'Scorers, exact results &amp; stats' : 'Exact results &amp; stats'}</summary>
+      ${fixture.scorers ? `<div class="pred-scorer-box">
+        <div><b>${esc(fixture.home)}</b>${scorerList(scorers.home)}</div>
+        <div><b>${esc(fixture.away)}</b>${scorerList(scorers.away)}</div>
+      </div>` : ''}
       <div class="pred-recent-grid">
         <div><b>${esc(fixture.home)}</b>${recentList(recent.home)}</div>
         <div><b>${esc(fixture.away)}</b>${recentList(recent.away)}</div>

@@ -29,24 +29,26 @@ results from ESPN, even in demo mode. Only the odds are simulated.
 
 ## Win probabilities
 
-The dashboard has a **Win probabilities** section with the next fixtures for La
-Liga, Champions League and the NBA.
+The dashboard has a **Win probabilities** section with the next fixtures for
+Serie A, La Liga, Champions League and the NBA.
 
 - **Football:** a time-weighted Poisson goals model with a Dixon–Coles low-score
   correction. Attack and defence ratings are fitted separately for each
-  competition. Output: `1`, `X`, `2`, expected goals, recent form and the sample
-  size for each team.
+  competition. Output: `1`, `X`, `2`, expected goals, most likely scoreline,
+  probable anytime scorers, recent form and the sample size for each team.
 - **NBA:** time-weighted point-margin ratings plus home-court advantage,
   converted to a win probability with a normal approximation. Output: `1`, `2`,
   projected margin and recent form.
 - **Exact results and stats:** for football, each fixture shows its most likely
   scoreline and the last-10-match averages for corners won and fouls committed.
-  Expanding a fixture lists the exact scoreline plus corners/fouls for every
-  recent match. NBA rows show fouls (no corners). These stats are descriptive,
-  not inputs to the win model.
+  NBA rows add projected made three-pointers. Expanding a fixture lists the
+  probable scorers, then the exact scoreline with corners/fouls (and 3PM for the
+  NBA) for every recent match. These stats are descriptive, not inputs to the
+  win model.
 - **Data:** [ESPN's public scoreboard API](https://site.api.espn.com/apis/site/v2/sports).
-  No key is required. Football corners/fouls come from the same scoreboard;
-  NBA fouls need the game summary and are cached in `data/espn_stats.json`.
+  No key is required. Football corners/fouls and NBA 3PM come from the same
+  scoreboard; NBA fouls and football scorer stats need extra endpoints and are
+  cached in `data/espn_stats.json` and `data/espn_rosters.json`.
 - **Validation:** each competition is refitted on an earlier training window
   and scored on a holdout period. The dashboard shows holdout accuracy, log loss
   and the number of test matches. This is a sanity check, not a promise.
