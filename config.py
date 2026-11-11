@@ -42,7 +42,7 @@ class Config:
     odds_api_io_sports: list[str] = field(default_factory=list)
     leagues: list[str] = field(default_factory=list)
     poll_seconds: int = 300
-    predictions_refresh_hours: int = 6
+    predictions_refresh_minutes: int = 30
     bankroll: float = 1000.0
     threshold: float = 0.985
     min_stake: float = 0.5
@@ -64,7 +64,11 @@ class Config:
         cfg.odds_api_io_sports = _csv(os.getenv("ODDS_API_IO_SPORTS")) or ["football", "basketball"]
         cfg.leagues = _csv(os.getenv("LEAGUES"))
         cfg.poll_seconds = max(30, int(os.getenv("POLL_SECONDS", "300")))
-        cfg.predictions_refresh_hours = max(1, int(os.getenv("PREDICTIONS_REFRESH_HOURS", "6")))
+        minutes = os.getenv("PREDICTIONS_REFRESH_MINUTES")
+        if minutes is None:
+            # Backwards compatibility with the old hours setting.
+            minutes = str(int(os.getenv("PREDICTIONS_REFRESH_HOURS", "1")) * 60)
+        cfg.predictions_refresh_minutes = max(5, int(minutes))
         cfg.bankroll = float(os.getenv("BANKROLL", "1000"))
         cfg.threshold = float(os.getenv("THRESHOLD", "0.985"))
         cfg.min_stake = float(os.getenv("MIN_STAKE", "0.5"))

@@ -6,12 +6,15 @@ from predictions import (
     COMPETITIONS,
     FootballModel,
     NbaModel,
+    _fixtures_for,
     _parse_events,
+    build_matches,
     fit_football,
     fit_nba,
     form_string,
     month_keys,
     normal_cdf,
+    recent_results,
     score_matrix,
     validate_football,
 )
@@ -181,6 +184,61 @@ class FormTests(unittest.TestCase):
             {"home": "A", "away": "C", "home_score": 0, "away_score": 3},
         ]
         self.assertEqual(form_string("A", matches, "football"), "WDL")
+
+    def test_recent_results_include_real_goals(self):
+        matches = [
+            {
+                "home": "A",
+                "away": "B",
+                "home_score": 2,
+                "away_score": 1,
+                "commence": NOW,
+            }
+        ]
+        rows = recent_results("B", matches)
+        self.assertEqual(rows, [f"L 1-2 vs A ({NOW.date().isoformat()})"])
+
+
+def event(state, completed, commence, home_score=None, away_score=None):
+    return {
+        "id": f"{state}-{commence.isoformat()}",
+        "home": "A",
+        "away": "B",
+        "commence": commence,
+        "home_score": home_score,
+        "away_score": away_score,
+        "completed": completed,
+        "state": state,
+        "season_type": "regular-season",
+    }
+
+
+class TrainingDataTests(unittest.TestCase):
+    def test_only_finished_matches_enter_training(self):
+        spec = COMPETITIONS["la_liga"]
+        events = [
+            event("post", True, NOW - timedelta(days=1), 2, 1),
+            event("pre", False, NOW + timedelta(days=1)),
+            event("in", False, NOW, 1, 0),
+            event("post", True, NOW - timedelta(days=2)),  # no score
+        ]
+        matches = build_matches(events, spec, NOW)
+        self.assertEqual(len(matches), 1)
+        self.assertEqual(matches[0]["home_score"], 2)
+        self.assertEqual(matches[0]["state"], "post")
+
+    def test_fixtures_are_future_and_inside_horizon(self):
+        spec = COMPETITIONS["nba"]
+        events = [
+            event("pre", False, NOW + timedelta(days=2)),
+            event("pre", False, NOW + timedelta(days=1)),
+            event("pre", False, NOW + timedelta(days=20)),
+            event("pre", False, NOW - timedelta(minutes=10)),
+            event("post", True, NOW + timedelta(days=1), 100, 90),
+        ]
+        fixtures = _fixtures_for(events, spec, NOW)
+        self.assertEqual([item["commence"] for item in fixtures], [NOW + timedelta(days=1), NOW + timedelta(days=2)])
+
 
 
 class OddsApiMappingTests(unittest.TestCase):

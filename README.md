@@ -44,9 +44,14 @@ Liga, Champions League and the NBA.
 - **Validation:** each competition is refitted on an earlier training window
   and scored on a holdout period. The dashboard shows holdout accuracy, log loss
   and the number of test matches. This is a sanity check, not a promise.
-- **Caching:** the model refreshes every `PREDICTIONS_REFRESH_HOURS` (default 6).
+- **Caching:** the model refreshes every `PREDICTIONS_REFRESH_MINUTES` (default 30).
   The snapshot is stored in `data/predictions.json`. If ESPN is unreachable, the
   previous snapshot is kept and marked `cached`.
+- **Training data:** only finished matches whose final score is available
+  (`state=post`). Scheduled, live, postponed and cancelled events never enter the
+  model, so every goal/point in the ratings was actually scored.
+- **Fixtures:** only matches that have not started, within the next 14 days,
+  soonest first.
 
 The model uses previous results only. It does not know lineups, injuries,
 suspensions, travel, managerial changes or current market prices. Treat the
@@ -131,7 +136,7 @@ controls which arbs trigger alerts; all arbs are still listed.
 - New arbs are deduplicated per 0.5 percentage-point margin bucket and 30-minute
   cooldown, persisted in `data/arb.db`.
 - Prediction thread refreshes the ESPN snapshot every
-  `PREDICTIONS_REFRESH_HOURS` (minimum 1).
+  `PREDICTIONS_REFRESH_MINUTES` (minimum 5).
 - Dashboard polls `/api/state` every 10 s, `/api/predictions` every 2 min, and
   can show browser notifications.
 - Optional Telegram push: set `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` in

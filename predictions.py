@@ -76,7 +76,7 @@ COMPETITIONS: dict[str, Competition] = {
         validation_days=60,
         min_train=100,
         min_test=20,
-        fixture_horizon_days=21,
+        fixture_horizon_days=14,
         fixture_limit=8,
     ),
     "champions_league": Competition(
@@ -89,7 +89,7 @@ COMPETITIONS: dict[str, Competition] = {
         validation_days=75,
         min_train=100,
         min_test=20,
-        fixture_horizon_days=30,
+        fixture_horizon_days=14,
         fixture_limit=8,
     ),
     "nba": Competition(
@@ -292,11 +292,16 @@ def _parse_events(raw: Iterable[dict[str, Any]], spec: Competition) -> list[dict
 
 
 def build_matches(events: Iterable[dict[str, Any]], spec: Competition, now: datetime) -> list[dict[str, Any]]:
-    """Completed matches inside the lookback window, ready for training."""
+    """Completed matches inside the lookback window, ready for training.
+
+    Only finished ESPN events are used. Scheduled, live, postponed and
+    cancelled events never enter the model, so the training set contains
+    real goals/points that were actually scored.
+    """
     start = now - timedelta(days=spec.lookback_days)
     matches: list[dict[str, Any]] = []
     for event in events:
-        if not event["completed"]:
+        if not event["completed"] or event.get("state") != "post":
             continue
         if not (start <= event["commence"] <= now):
             continue
@@ -666,15 +671,42 @@ def form_string(team: str, matches: list[dict[str, Any]], sport: str, limit: int
     return "".join(reversed(results))
 
 
+def recent_results(team: str, matches: list[dict[str, Any]], limit: int = 5) -> list[str]:
+    """Newest-first scorelines, e.g. ``W 2-1 vs Espanyol``.
+
+    This is display-only proof that the model is fed real finished matches and
+    their goals; it does not change the ratings.
+    """
+    rows: list[str] = []
+    for match in reversed(matches):
+        if match["home"] != team and match["away"] != team:
+            continue
+        home = match["home"] == team
+        scored = int(match["home_score"] if home else match["away_score"])
+        conceded = int(match["away_score"] if home else match["home_score"])
+        opponent = match["away"] if home else match["home"]
+        result = "W" if scored > conceded else "D" if scored == conceded else "L"
+        date = match["commence"].date().isoformat()
+        rows.append(f"{result} {scored}-{conceded} vs {opponent} ({date})")
+        if len(rows) >= limit:
+            break
+    return rows
+
+
 def _fixtures_for(
     events: list[dict[str, Any]],
     spec: Competition,
     now: datetime,
 ) -> list[dict[str, Any]]:
+    """Upcoming matches in the near future, soonest first.
+
+    Only events that have not started are eligible. The horizon is capped so
+    the page shows the next round, not games several weeks away.
+    """
     future = [
         event
         for event in events
-        if event["state"] == "pre" and event["commence"] >= now - timedelta(hours=1)
+        if event["state"] == "pre" and event["commence"] > now
     ]
     if spec.sport == "basketball":
         regular = [event for event in future if event["season_type"] == "regular-season"]
@@ -685,8 +717,7 @@ def _fixtures_for(
         for event in future
         if event["commence"] <= now + timedelta(days=spec.fixture_horizon_days)
     ]
-    selected = inside if len(inside) >= 3 else future
-    selected = sorted(selected, key=lambda event: event["commence"])
+    selected = sorted(inside, key=lambda event: event["commence"])
     return selected[: spec.fixture_limit]
 
 
@@ -736,10 +767,19 @@ def build_competition(spec: Competition, now: datetime) -> dict[str, Any]:
             "home": home,
             "away": away,
             "commence": event["commence"].isoformat().replace("+00:00", "Z"),
+            "espn_url": (
+                f"https://www.espn.com/nba/game/_/gameId/{event['id']}"
+                if spec.sport == "basketball"
+                else f"https://www.espn.com/soccer/match/_/gameId/{event['id']}"
+            ),
             "outcomes": _outcomes(model, home, away),
             "form": {
                 "home": form_string(home, matches, spec.sport),
                 "away": form_string(away, matches, spec.sport),
+            },
+            "recent": {
+                "home": recent_results(home, matches),
+                "away": recent_results(away, matches),
             },
             "sample": {
                 "home": sample.get(home, 0),
@@ -762,6 +802,13 @@ def build_competition(spec: Competition, now: datetime) -> dict[str, Any]:
         "sport": spec.sport,
         "model": model_label,
         "trained_matches": len(matches),
+        "trained_through": max(match["commence"] for match in matches).date().isoformat(),
+        "training": {
+            "completed_only": True,
+            "scores_included": True,
+            "lookback_days": spec.lookback_days,
+            "half_life_days": spec.half_life_days,
+        },
         "teams": model.teams,
         "lookback_days": spec.lookback_days,
         "half_life_days": spec.half_life_days,
@@ -820,8 +867,9 @@ def build_snapshot(
         "source": "ESPN public scoreboard API",
         "loading": False,
         "model_note": (
-            "Football: time-weighted Dixon-Coles Poisson from previous results. "
-            "NBA: time-weighted point-margin ratings. No lineups, injuries or market prices."
+            "Trained only on finished matches with final scores (ESPN). "
+            "Football: time-weighted Dixon-Coles Poisson. NBA: time-weighted "
+            "point-margin ratings. No lineups, injuries or market prices."
         ),
         "competitions": competitions,
         "warnings": warnings,

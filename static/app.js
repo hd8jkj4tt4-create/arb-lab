@@ -354,19 +354,23 @@ function predRow(fixture) {
     ? `xG ${fixture.expected_goals[0].toFixed(2)}–${fixture.expected_goals[1].toFixed(2)}`
     : `proj. margin ${fixture.projected_margin > 0 ? '+' : ''}${Number(fixture.projected_margin).toFixed(1)}`;
   const sample = fixture.sample ? `${fixture.sample.home}/${fixture.sample.away} matches` : '';
+  const recent = fixture.recent || {};
+  const formTitle = (label, rows) => rows && rows.length
+    ? `${label} recent results (newest first):\n${rows.join('\n')}`
+    : `${label} recent results: no finished matches in the training window`;
   return `<div class="pred-row">
     <div class="pred-when">${esc(when(fixture.commence))}</div>
     <div class="pred-teams">
-      <div class="pred-match">${esc(fixture.home)} <span>vs</span> ${esc(fixture.away)}</div>
+      <div class="pred-match"><a href="${esc(fixture.espn_url || '#')}" target="_blank" rel="noopener noreferrer">${esc(fixture.home)} <span>vs</span> ${esc(fixture.away)}</a></div>
       <div class="pred-sub">${esc(detail)}${sample ? ` · ${esc(sample)}` : ''}</div>
     </div>
     <div class="pred-probs">
       <div class="prob-bar">${bar}</div>
       <div class="prob-labels">${labels}</div>
     </div>
-    <div class="pred-form" title="Last results, oldest to newest">
-      <span><em>H</em>${formBadges(fixture.form && fixture.form.home)}</span>
-      <span><em>A</em>${formBadges(fixture.form && fixture.form.away)}</span>
+    <div class="pred-form">
+      <span title="${esc(formTitle(fixture.home, recent.home))}"><em>H</em>${formBadges(fixture.form && fixture.form.home)}</span>
+      <span title="${esc(formTitle(fixture.away, recent.away))}"><em>A</em>${formBadges(fixture.form && fixture.form.away)}</span>
     </div>
   </div>`;
 }
@@ -376,7 +380,8 @@ function predGroup(comp) {
   const holdout = validation
     ? `holdout ${plainPct(validation.accuracy, 0)} · ${validation.log_loss.toFixed(3)} log loss · ${validation.matches} matches`
     : 'holdout not available';
-  const meta = `${comp.model} · ${comp.trained_matches} matches · ${comp.teams} teams`;
+  const through = comp.trained_through ? ` through ${comp.trained_through}` : '';
+  const meta = `${comp.model} · ${comp.trained_matches} finished matches${through} · goals counted`;
   const fixtures = comp.fixtures || [];
   const warnings = (comp.warnings || []).filter(Boolean);
   const empty = `<div class="pred-empty">${comp.error ? esc(comp.error) : 'No upcoming fixtures published yet.'}</div>`;

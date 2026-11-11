@@ -223,7 +223,7 @@ def build_payload() -> dict[str, Any]:
             "regions": CFG.regions,
             "bookmakers": CFG.bookmakers,
             "sports": [SPORTS.get(s, s) for s in CFG.sports],
-            "predictions_refresh_hours": CFG.predictions_refresh_hours,
+            "predictions_refresh_minutes": CFG.predictions_refresh_minutes,
             "has_odds_api_key": bool(CFG.odds_api_key),
             "has_odds_api_io_key": bool(CFG.odds_api_io_key),
             "telegram": bool(CFG.telegram_token and CFG.telegram_chat),
@@ -293,7 +293,7 @@ def poll_loop() -> None:
 
 def predictions_loop() -> None:
     """Refresh the win-probability model independently from odds polling."""
-    normal_delay = max(1, CFG.predictions_refresh_hours) * 3600
+    normal_delay = max(5, CFG.predictions_refresh_minutes) * 60
     while True:
         delay = normal_delay
         try:
