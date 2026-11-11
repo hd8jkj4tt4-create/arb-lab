@@ -63,6 +63,21 @@ Serie A, La Liga, Champions League and the NBA.
 - **Fixtures:** only matches that have not started, within the next 14 days,
   soonest first.
 
+## Deploy on Render
+
+The repo includes `render.yaml`. In Render: **New + → Blueprint**, pick the
+`arb-lab` repository, then paste the value of `ODDS_API_KEY` when prompted.
+
+- The service binds to `0.0.0.0` and uses Render's `PORT` automatically.
+- `HOST`, sports, poll interval and prediction refresh are set in
+  `render.yaml`; edit them there (or in the Render dashboard) and redeploy.
+- The free plan spins down after 15 minutes without traffic. While asleep the
+  background poller does not run; the dashboard and a fresh scan start on the
+  next visit. `data/` is ephemeral on the free plan, so the database and caches
+  are rebuilt after each restart/deploy.
+- `ODDS_API_KEY` is a secret and is never committed; `.env` is gitignored.
+
+
 The model uses previous results only. It does not know lineups, injuries,
 suspensions, travel, managerial changes or current market prices. Treat the
 percentages as a second opinion, not as a betting edge.

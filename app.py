@@ -489,7 +489,7 @@ def main() -> None:
     log.info("provider: %s (%s)", PROVIDER.key, PROVIDER.label)
     if PROVIDER_WARNING:
         log.warning(PROVIDER_WARNING)
-    log.info("poll every %ss · http://127.0.0.1:%s", CFG.poll_seconds, CFG.port)
+    log.info("poll every %ss · port %s", CFG.poll_seconds, CFG.port)
 
     thread = threading.Thread(target=poll_loop, name="poller", daemon=True)
     thread.start()
@@ -497,7 +497,10 @@ def main() -> None:
     predictions_thread = threading.Thread(target=predictions_loop, name="predictions", daemon=True)
     predictions_thread.start()
 
-    host = os.getenv("HOST", "127.0.0.1")
+    # Render (and most PaaS) require binding to 0.0.0.0. Keep localhost only
+    # for local runs so the dashboard is not exposed on the LAN by default.
+    default_host = "0.0.0.0" if os.getenv("RENDER") else "127.0.0.1"
+    host = os.getenv("HOST", default_host)
     server = ThreadingHTTPServer((host, CFG.port), Handler)
     server.daemon_threads = True
     try:

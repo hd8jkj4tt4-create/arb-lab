@@ -1,0 +1,32 @@
+services:
+  - type: web
+    name: arb-lab
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: python3 app.py
+    healthCheckPath: /api/health
+    autoDeploy: true
+    envVars:
+      - key: HOST
+        value: 0.0.0.0
+      - key: PROVIDER
+        value: theoddsapi
+      - key: ODDS_API_KEY
+        sync: false
+      - key: SPORTS
+        value: soccer_italy_serie_a,soccer_italy_serie_b,soccer_italy_coppa_italia,soccer_uefa_champs_league,soccer_spain_la_liga,basketball_nba
+      - key: REGIONS
+        value: eu
+      - key: POLL_SECONDS
+        value: "36000"
+      - key: PREDICTIONS_REFRESH_MINUTES
+        value: "30"
+      - key: BANKROLL
+        value: "1000"
+      - key: THRESHOLD
+        value: "0.985"
+      - key: MIN_STAKE
+        value: "0.5"
+      - key: PYTHON_VERSION
+        value: "3.12.6"
