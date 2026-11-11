@@ -39,8 +39,14 @@ Liga, Champions League and the NBA.
 - **NBA:** time-weighted point-margin ratings plus home-court advantage,
   converted to a win probability with a normal approximation. Output: `1`, `2`,
   projected margin and recent form.
+- **Exact results and stats:** for football, each fixture shows its most likely
+  scoreline and the last-10-match averages for corners won and fouls committed.
+  Expanding a fixture lists the exact scoreline plus corners/fouls for every
+  recent match. NBA rows show fouls (no corners). These stats are descriptive,
+  not inputs to the win model.
 - **Data:** [ESPN's public scoreboard API](https://site.api.espn.com/apis/site/v2/sports).
-  No key is required.
+  No key is required. Football corners/fouls come from the same scoreboard;
+  NBA fouls need the game summary and are cached in `data/espn_stats.json`.
 - **Validation:** each competition is refitted on an earlier training window
   and scored on a holdout period. The dashboard shows holdout accuracy, log loss
   and the number of test matches. This is a sanity check, not a promise.

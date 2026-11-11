@@ -353,8 +353,22 @@ function predRow(fixture) {
   const detail = fixture.expected_goals
     ? `xG ${fixture.expected_goals[0].toFixed(2)}–${fixture.expected_goals[1].toFixed(2)}`
     : `proj. margin ${fixture.projected_margin > 0 ? '+' : ''}${Number(fixture.projected_margin).toFixed(1)}`;
+  const likely = fixture.likely_score
+    ? ` · likely ${fixture.likely_score.score} (${plainPct(fixture.likely_score.probability, 0)})`
+    : '';
   const sample = fixture.sample ? `${fixture.sample.home}/${fixture.sample.away} matches` : '';
+  const projected = fixture.projected || {};
+  const corners = projected.corners && projected.corners.total != null
+    ? `corners ~${Number(projected.corners.total).toFixed(1)}`
+    : '';
+  const fouls = projected.fouls && projected.fouls.total != null
+    ? `fouls ~${Number(projected.fouls.total).toFixed(1)}`
+    : '';
+  const markets = [corners, fouls].filter(Boolean).join(' · ');
   const recent = fixture.recent || {};
+  const recentList = (rows) => (rows && rows.length
+    ? `<ul>${rows.map((row) => `<li>${esc(row)}</li>`).join('')}</ul>`
+    : '<p class="recent-empty">No finished matches with stats.</p>');
   const formTitle = (label, rows) => rows && rows.length
     ? `${label} recent results (newest first):\n${rows.join('\n')}`
     : `${label} recent results: no finished matches in the training window`;
@@ -362,7 +376,8 @@ function predRow(fixture) {
     <div class="pred-when">${esc(when(fixture.commence))}</div>
     <div class="pred-teams">
       <div class="pred-match"><a href="${esc(fixture.espn_url || '#')}" target="_blank" rel="noopener noreferrer">${esc(fixture.home)} <span>vs</span> ${esc(fixture.away)}</a></div>
-      <div class="pred-sub">${esc(detail)}${sample ? ` · ${esc(sample)}` : ''}</div>
+      <div class="pred-sub">${esc(detail)}${esc(likely)}${sample ? ` · ${esc(sample)}` : ''}</div>
+      ${markets ? `<div class="pred-markets">${esc(markets)}</div>` : ''}
     </div>
     <div class="pred-probs">
       <div class="prob-bar">${bar}</div>
@@ -372,6 +387,13 @@ function predRow(fixture) {
       <span title="${esc(formTitle(fixture.home, recent.home))}"><em>H</em>${formBadges(fixture.form && fixture.form.home)}</span>
       <span title="${esc(formTitle(fixture.away, recent.away))}"><em>A</em>${formBadges(fixture.form && fixture.form.away)}</span>
     </div>
+    <details class="pred-recent">
+      <summary>Exact results, corners &amp; fouls</summary>
+      <div class="pred-recent-grid">
+        <div><b>${esc(fixture.home)}</b>${recentList(recent.home)}</div>
+        <div><b>${esc(fixture.away)}</b>${recentList(recent.away)}</div>
+      </div>
+    </details>
   </div>`;
 }
 

@@ -216,6 +216,17 @@ details.detail[open] summary::before{transform:rotate(90deg)}
 .pred-match a:hover{color:#cfe6ff;text-decoration:underline}
 .pred-match span{color:var(--dim);font-weight:500;margin:0 3px}
 .pred-sub{font-size:9.5px;color:var(--dim);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.pred-markets{font-size:9.5px;color:#a8ceff;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.pred-recent{grid-column:1/-1;margin-top:-2px;border-top:1px dashed rgba(34,49,74,.6);padding-top:5px}
+.pred-recent summary{cursor:pointer;font-size:9.5px;color:var(--dim);list-style:none;display:inline-flex;align-items:center;gap:5px}
+.pred-recent summary::-webkit-details-marker{display:none}
+.pred-recent summary:before{content:'+';font-weight:800;color:#7aa7d6}
+.pred-recent[open] summary:before{content:'−'}
+.pred-recent-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:7px}
+.pred-recent-grid b{font-size:9.5px;color:var(--muted);display:block;margin-bottom:3px}
+.pred-recent-grid ul{margin:0;padding:0;list-style:none;display:grid;gap:2px}
+.pred-recent-grid li{font-size:9.5px;color:var(--dim);font-variant-numeric:tabular-nums}
+.recent-empty{font-size:9.5px;color:var(--dim);margin:0}
 .pred-probs{min-width:0}
 .prob-bar{display:flex;height:7px;border-radius:99px;overflow:hidden;background:#080d15;border:1px solid rgba(34,49,74,.6)}
 .pseg{display:block;height:100%}
@@ -253,6 +264,7 @@ details.detail[open] summary::before{transform:rotate(90deg)}
   .pred-row{grid-template-columns:1fr;gap:5px}
   .pred-when{font-size:9.5px}
   .pred-match{font-size:12.5px}
+  .pred-recent-grid{grid-template-columns:1fr}
 }
 
 footer{margin-top:26px;font-size:11px;line-height:1.65;color:var(--dim);border-top:1px solid rgba(34,49,74,.7);padding-top:14px}

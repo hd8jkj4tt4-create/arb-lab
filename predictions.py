@@ -25,6 +25,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from collections import Counter
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -36,6 +37,7 @@ log = logging.getLogger("arb-lab.predictions")
 
 ROOT = Path(__file__).resolve().parent
 CACHE_PATH = ROOT / "data" / "predictions.json"
+STATS_CACHE_PATH = ROOT / "data" / "espn_stats.json"
 ESPN = "https://site.api.espn.com/apis/site/v2/sports"
 
 # The model uses a 0..10 score grid for football. The factorial table keeps the
@@ -209,6 +211,90 @@ def load_events(spec: Competition, now: datetime) -> tuple[list[dict[str, Any]],
     return events, warnings
 
 
+def _nba_fouls(event_id: str) -> dict[str, float] | None:
+    """Fouls from an NBA game summary (scoreboard omits them)."""
+    data = fetch_json(f"{ESPN}/basketball/nba/summary?event={event_id}")
+    teams = ((data.get("boxscore") or {}).get("teams") or []) if isinstance(data, dict) else []
+    out: dict[str, float] = {}
+    for side in teams:
+        if not isinstance(side, dict):
+            continue
+        home_away = str(side.get("homeAway") or "")
+        if home_away not in ("home", "away"):
+            continue
+        value = _side_stat(side, _FOUL_KEYS)
+        if value is not None:
+            out[home_away] = value
+    return out if "home" in out and "away" in out else None
+
+
+def _load_stats_cache() -> dict[str, dict[str, float]]:
+    try:
+        data = json.loads(STATS_CACHE_PATH.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def _save_stats_cache(cache: dict[str, dict[str, float]]) -> None:
+    STATS_CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    tmp = STATS_CACHE_PATH.with_suffix(".tmp")
+    tmp.write_text(json.dumps(cache, indent=0, sort_keys=True), encoding="utf-8")
+    os.replace(tmp, STATS_CACHE_PATH)
+
+
+def enrich_nba_fouls(
+    matches: list[dict[str, Any]],
+    teams: set[str],
+    warnings: list[str],
+    window: int = 5,
+) -> None:
+    """Attach NBA fouls to each team's last few games, caching summaries.
+
+    The scoreboard feed exposes points but not fouls, so this fetches the game
+    summary only for the recent games needed by the upcoming fixtures. Results
+    are cached in data/espn_stats.json to keep later refreshes cheap.
+    """
+    cache = _load_stats_cache()
+    by_id = {match["id"]: match for match in matches}
+    wanted: set[str] = set()
+    for team in teams:
+        seen = 0
+        for match in reversed(matches):
+            if match["home"] != team and match["away"] != team:
+                continue
+            seen += 1
+            if match["id"] not in cache:
+                wanted.add(match["id"])
+            if seen >= window:
+                break
+
+    missing = [event_id for event_id in wanted if event_id not in cache]
+    if missing:
+        fetched: dict[str, dict[str, float]] = {}
+        with ThreadPoolExecutor(max_workers=6) as pool:
+            futures = {pool.submit(_nba_fouls, event_id): event_id for event_id in missing}
+            for future in as_completed(futures):
+                event_id = futures[future]
+                try:
+                    stats = future.result()
+                except Exception as exc:  # noqa: BLE001 - stats are best effort
+                    warnings.append(f"NBA fouls {event_id}: {exc}")
+                    continue
+                if stats:
+                    fetched[event_id] = stats
+        if fetched:
+            cache.update(fetched)
+            _save_stats_cache(cache)
+
+    for event_id, match in by_id.items():
+        stats = cache.get(event_id)
+        if not stats:
+            continue
+        match["home_fouls"] = stats.get("home")
+        match["away_fouls"] = stats.get("away")
+
+
 def _parse_date(value: Any) -> datetime | None:
     if not isinstance(value, str) or not value.strip():
         return None
@@ -231,6 +317,30 @@ def _parse_score(value: Any) -> int | None:
         return int(float(value))
     except (TypeError, ValueError):
         return None
+
+
+def _parse_number(value: Any) -> float | None:
+    if isinstance(value, dict):
+        value = value.get("value", value.get("displayValue"))
+    if value is None or value == "":
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+# ESPN uses different stat names for the same concept across sports.
+_FOUL_KEYS = ("foulsCommitted", "fouls", "foulsTotal", "teamFouls")
+_CORNER_KEYS = ("wonCorners", "corners", "cornerKicks", "totalCorners")
+
+
+def _side_stat(side: dict[str, Any], keys: tuple[str, ...]) -> float | None:
+    stats = side.get("statistics") or []
+    for row in stats:
+        if str(row.get("name") or "") in keys:
+            return _parse_number(row.get("displayValue", row.get("value")))
+    return None
 
 
 def _parse_events(raw: Iterable[dict[str, Any]], spec: Competition) -> list[dict[str, Any]]:
@@ -278,6 +388,10 @@ def _parse_events(raw: Iterable[dict[str, Any]], spec: Competition) -> list[dict
                 "commence": commence,
                 "home_score": _parse_score(home.get("score")),
                 "away_score": _parse_score(away.get("score")),
+                "home_fouls": _side_stat(home, _FOUL_KEYS),
+                "away_fouls": _side_stat(away, _FOUL_KEYS),
+                "home_corners": _side_stat(home, _CORNER_KEYS),
+                "away_corners": _side_stat(away, _CORNER_KEYS),
                 "completed": completed,
                 "state": state,
                 "season_type": season_type,
@@ -375,6 +489,15 @@ class FootballModel:
     def probabilities(self, home: str, away: str) -> dict[str, float]:
         home_rate, away_rate = self.expected_goals(home, away)
         return matrix_outcomes(score_matrix(home_rate, away_rate))
+
+    def most_likely_score(self, home: str, away: str) -> dict[str, Any]:
+        home_rate, away_rate = self.expected_goals(home, away)
+        matrix = score_matrix(home_rate, away_rate)
+        h, a = max(
+            ((h, a) for h in range(GRID) for a in range(GRID)),
+            key=lambda pair: matrix[pair[0]][pair[1]],
+        )
+        return {"score": f"{h}-{a}", "probability": round(matrix[h][a], 4)}
 
 
 def _time_weight(commence: datetime, reference: datetime, half_life_days: int) -> float:
@@ -671,8 +794,20 @@ def form_string(team: str, matches: list[dict[str, Any]], sport: str, limit: int
     return "".join(reversed(results))
 
 
+def _team_stat(match: dict[str, Any], team: str, key: str) -> float | None:
+    if match["home"] == team:
+        return match.get(f"home_{key}")
+    if match["away"] == team:
+        return match.get(f"away_{key}")
+    return None
+
+
+def _fmt_stat(value: float) -> str:
+    return str(int(value)) if float(value).is_integer() else f"{value:.1f}"
+
+
 def recent_results(team: str, matches: list[dict[str, Any]], limit: int = 5) -> list[str]:
-    """Newest-first scorelines, e.g. ``W 2-1 vs Espanyol``.
+    """Newest-first scorelines with corners and fouls, when ESPN provides them.
 
     This is display-only proof that the model is fed real finished matches and
     their goals; it does not change the ratings.
@@ -687,10 +822,71 @@ def recent_results(team: str, matches: list[dict[str, Any]], limit: int = 5) -> 
         opponent = match["away"] if home else match["home"]
         result = "W" if scored > conceded else "D" if scored == conceded else "L"
         date = match["commence"].date().isoformat()
-        rows.append(f"{result} {scored}-{conceded} vs {opponent} ({date})")
+        extras: list[str] = []
+        corners = _team_stat(match, team, "corners")
+        fouls = _team_stat(match, team, "fouls")
+        if corners is not None:
+            extras.append(f"{_fmt_stat(corners)} corners")
+        if fouls is not None:
+            extras.append(f"{_fmt_stat(fouls)} fouls")
+        suffix = f" · {', '.join(extras)}" if extras else ""
+        rows.append(f"{result} {scored}-{conceded} vs {opponent} ({date}){suffix}")
         if len(rows) >= limit:
             break
     return rows
+
+
+def team_averages(
+    matches: list[dict[str, Any]],
+    team: str,
+    limit: int = 10,
+) -> dict[str, Any]:
+    """Average corners won and fouls committed over a team's last matches."""
+    fouls: list[float] = []
+    corners: list[float] = []
+    seen = 0
+    for match in reversed(matches):
+        if match["home"] != team and match["away"] != team:
+            continue
+        seen += 1
+        foul = _team_stat(match, team, "fouls")
+        corner = _team_stat(match, team, "corners")
+        if foul is not None:
+            fouls.append(foul)
+        if corner is not None:
+            corners.append(corner)
+        if seen >= limit:
+            break
+    return {
+        "matches": seen,
+        "fouls": round(sum(fouls) / len(fouls), 2) if fouls else None,
+        "corners": round(sum(corners) / len(corners), 2) if corners else None,
+        "fouls_sample": len(fouls),
+        "corners_sample": len(corners),
+    }
+
+
+def projected_stats(
+    matches: list[dict[str, Any]],
+    home: str,
+    away: str,
+    limit: int = 10,
+) -> dict[str, Any]:
+    """Simple recent-average projections for corners and fouls."""
+    home_avg = team_averages(matches, home, limit)
+    away_avg = team_averages(matches, away, limit)
+    out: dict[str, Any] = {
+        "window": limit,
+        "sample": min(home_avg["matches"], away_avg["matches"]),
+    }
+    for key in ("corners", "fouls"):
+        left, right = home_avg[key], away_avg[key]
+        out[key] = {
+            "home": left,
+            "away": right,
+            "total": round(left + right, 2) if left is not None and right is not None else None,
+        }
+    return out
 
 
 def _fixtures_for(
@@ -738,6 +934,11 @@ def build_competition(spec: Competition, now: datetime) -> dict[str, Any]:
     events = _parse_events(raw, spec)
     matches = build_matches(events, spec, now)
     fixtures = _fixtures_for(events, spec, now)
+
+    stats_window = 5 if spec.sport == "basketball" else 10
+    if fixtures and spec.sport == "basketball":
+        fixture_teams = {event["home"] for event in fixtures} | {event["away"] for event in fixtures}
+        enrich_nba_fouls(matches, fixture_teams, warnings, window=stats_window)
 
     if not matches:
         raise DataError(f"no completed {spec.name} results in the last {spec.lookback_days} days")
@@ -789,8 +990,10 @@ def build_competition(spec: Competition, now: datetime) -> dict[str, Any]:
         if isinstance(model, FootballModel):
             home_rate, away_rate = model.expected_goals(home, away)
             row["expected_goals"] = [round(home_rate, 2), round(away_rate, 2)]
+            row["likely_score"] = model.most_likely_score(home, away)
         else:
             row["projected_margin"] = round(model.projected_margin(home, away), 2)
+        row["projected"] = projected_stats(matches, home, away, stats_window)
         fixture_rows.append(row)
 
     if not fixture_rows:
@@ -869,7 +1072,8 @@ def build_snapshot(
         "model_note": (
             "Trained only on finished matches with final scores (ESPN). "
             "Football: time-weighted Dixon-Coles Poisson. NBA: time-weighted "
-            "point-margin ratings. No lineups, injuries or market prices."
+            "point-margin ratings. Corners and fouls are last-10-match averages, "
+            "not model outputs. No lineups, injuries or market prices."
         ),
         "competitions": competitions,
         "warnings": warnings,

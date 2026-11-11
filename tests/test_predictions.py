@@ -14,8 +14,10 @@ from predictions import (
     form_string,
     month_keys,
     normal_cdf,
+    projected_stats,
     recent_results,
     score_matrix,
+    team_averages,
     validate_football,
 )
 from providers import DemoProvider, TheOddsAPIProvider
@@ -156,6 +158,45 @@ class ParsingTests(unittest.TestCase):
         self.assertEqual(parsed[0]["away_score"], 1)
         self.assertTrue(parsed[0]["completed"])
 
+    def test_parse_events_reads_corners_and_fouls(self):
+        raw = [
+            {
+                "id": "1",
+                "date": "2026-11-10T20:00Z",
+                "season": {"slug": "league-phase"},
+                "competitions": [
+                    {
+                        "status": {"type": {"state": "post", "completed": True}},
+                        "competitors": [
+                            {
+                                "homeAway": "home",
+                                "score": "2",
+                                "team": {"displayName": "Home FC"},
+                                "statistics": [
+                                    {"name": "wonCorners", "displayValue": "7"},
+                                    {"name": "foulsCommitted", "displayValue": "11"},
+                                ],
+                            },
+                            {
+                                "homeAway": "away",
+                                "score": "1",
+                                "team": {"displayName": "Away FC"},
+                                "statistics": [
+                                    {"name": "wonCorners", "displayValue": "4"},
+                                    {"name": "foulsCommitted", "displayValue": "14"},
+                                ],
+                            },
+                        ],
+                    }
+                ],
+            }
+        ]
+        parsed = _parse_events(raw, COMPETITIONS["la_liga"])
+        self.assertEqual(parsed[0]["home_corners"], 7)
+        self.assertEqual(parsed[0]["away_corners"], 4)
+        self.assertEqual(parsed[0]["home_fouls"], 11)
+        self.assertEqual(parsed[0]["away_fouls"], 14)
+
     def test_preseason_nba_is_ignored(self):
         raw = [
             {
@@ -197,6 +238,27 @@ class FormTests(unittest.TestCase):
         ]
         rows = recent_results("B", matches)
         self.assertEqual(rows, [f"L 1-2 vs A ({NOW.date().isoformat()})"])
+
+    def test_recent_results_include_corners_and_fouls(self):
+        matches = [
+            {
+                "home": "A",
+                "away": "B",
+                "home_score": 2,
+                "away_score": 1,
+                "home_corners": 7,
+                "home_fouls": 11,
+                "away_corners": 4,
+                "away_fouls": 14,
+                "commence": NOW,
+            }
+        ]
+        rows = recent_results("A", matches)
+        self.assertEqual(rows, [f"W 2-1 vs B ({NOW.date().isoformat()}) · 7 corners, 11 fouls"])
+        self.assertEqual(team_averages(matches, "A")["corners"], 7)
+        projected = projected_stats(matches, "A", "B")
+        self.assertEqual(projected["corners"]["total"], 11)
+        self.assertEqual(projected["fouls"]["total"], 25)
 
 
 def event(state, completed, commence, home_score=None, away_score=None):
