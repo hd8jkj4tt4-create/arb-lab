@@ -232,8 +232,49 @@ def italian_league(name: str) -> bool:
     )
 
 
-ITALY_SPORTS = {
+# Competitions the scanner and the win-probability model follow. The keys are
+# The Odds API sport keys; the values are the labels shown in the dashboard.
+SPORTS = {
     "soccer_italy_serie_a": "Serie A",
     "soccer_italy_serie_b": "Serie B",
     "soccer_italy_coppa_italia": "Coppa Italia",
+    "soccer_uefa_champs_league": "Champions League",
+    "soccer_spain_la_liga": "La Liga",
+    "basketball_nba": "NBA",
 }
+
+# Kept for callers that only want the original Italian slate.
+ITALY_SPORTS = {
+    key: value
+    for key, value in SPORTS.items()
+    if key.startswith("soccer_italy_")
+}
+
+
+def tracked_league(name: str) -> bool:
+    """True when a provider league belongs to the tracked competitions."""
+    lowered = (name or "").strip().lower()
+    if not lowered:
+        return False
+    if any(
+        x in lowered
+        for x in (
+            "women", "femminile", "primavera", "u19", "u20", "u21",
+            "youth", "g league", "summer league", "preseason",
+            "all-star", "all star", "segunda", "la liga 2", "laliga 2",
+        )
+    ):
+        return False
+    if italian_league(lowered):
+        return True
+    if " - " in lowered:
+        country = lowered.split(" - ", 1)[0].strip()
+        if country not in (
+            "spain", "spagna", "europe", "uefa", "usa", "united states",
+            "international", "world",
+        ):
+            return False
+    return any(
+        x in lowered
+        for x in ("champions league", "la liga", "laliga", "nba")
+    )

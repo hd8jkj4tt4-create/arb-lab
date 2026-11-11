@@ -14,6 +14,11 @@ const S = {
   refreshing: false,
   error: null,
   byId: new Map(),
+  predictions: null,
+  predComp: 'all',
+  predLoading: false,
+  predError: null,
+  predRetry: null,
 };
 
 const $ = (sel) => document.querySelector(sel);
@@ -321,6 +326,155 @@ function renderHistory(d) {
   }).join('');
 }
 
+/* ---------------------------------------------------------- predictions */
+function formBadges(form) {
+  if (!form) return '<span class="form-empty">—</span>';
+  return form.split('').map((result) => {
+    const cls = result === 'W' ? 'w' : result === 'D' ? 'd' : 'l';
+    return `<i class="f ${cls}">${esc(result)}</i>`;
+  }).join('');
+}
+
+function probClass(code) {
+  if (code === '1') return 'one';
+  if (code === 'X') return 'draw';
+  return 'two';
+}
+
+function predRow(fixture) {
+  const outcomes = fixture.outcomes || [];
+  const bar = outcomes.map((outcome) => {
+    const width = clamp(outcome.probability * 100, 0, 100);
+    return `<span class="pseg ${probClass(outcome.code)}" style="width:${width.toFixed(2)}%" title="${esc(outcome.label)} ${plainPct(outcome.probability, 1)}"></span>`;
+  }).join('');
+  const labels = outcomes.map((outcome) => (
+    `<span class="plabel"><i class="pdot ${probClass(outcome.code)}"></i>${esc(outcome.code)} <b>${plainPct(outcome.probability, 0)}</b></span>`
+  )).join('');
+  const detail = fixture.expected_goals
+    ? `xG ${fixture.expected_goals[0].toFixed(2)}–${fixture.expected_goals[1].toFixed(2)}`
+    : `proj. margin ${fixture.projected_margin > 0 ? '+' : ''}${Number(fixture.projected_margin).toFixed(1)}`;
+  const sample = fixture.sample ? `${fixture.sample.home}/${fixture.sample.away} matches` : '';
+  return `<div class="pred-row">
+    <div class="pred-when">${esc(when(fixture.commence))}</div>
+    <div class="pred-teams">
+      <div class="pred-match">${esc(fixture.home)} <span>vs</span> ${esc(fixture.away)}</div>
+      <div class="pred-sub">${esc(detail)}${sample ? ` · ${esc(sample)}` : ''}</div>
+    </div>
+    <div class="pred-probs">
+      <div class="prob-bar">${bar}</div>
+      <div class="prob-labels">${labels}</div>
+    </div>
+    <div class="pred-form" title="Last results, oldest to newest">
+      <span><em>H</em>${formBadges(fixture.form && fixture.form.home)}</span>
+      <span><em>A</em>${formBadges(fixture.form && fixture.form.away)}</span>
+    </div>
+  </div>`;
+}
+
+function predGroup(comp) {
+  const validation = comp.validation;
+  const holdout = validation
+    ? `holdout ${plainPct(validation.accuracy, 0)} · ${validation.log_loss.toFixed(3)} log loss · ${validation.matches} matches`
+    : 'holdout not available';
+  const meta = `${comp.model} · ${comp.trained_matches} matches · ${comp.teams} teams`;
+  const fixtures = comp.fixtures || [];
+  const warnings = (comp.warnings || []).filter(Boolean);
+  const empty = `<div class="pred-empty">${comp.error ? esc(comp.error) : 'No upcoming fixtures published yet.'}</div>`;
+  return `<div class="pred-group${comp.stale ? ' stale' : ''}">
+    <div class="pred-group-head">
+      <div>
+        <h3>${esc(comp.name)}${comp.stale ? '<span class="pred-badge amber">cached</span>' : ''}</h3>
+        <p>${esc(meta)}</p>
+      </div>
+      <span class="pred-badge">${esc(holdout)}</span>
+    </div>
+    ${fixtures.length ? `<div class="pred-list">${fixtures.map(predRow).join('')}</div>` : empty}
+    ${warnings.length ? `<div class="pred-warns">${warnings.map((warning) => `<span>${esc(warning)}</span>`).join('')}</div>` : ''}
+  </div>`;
+}
+
+function renderPredictions() {
+  const data = S.predictions;
+  const groups = $('#predGroups');
+  const empty = $('#predEmpty');
+  const updated = $('#predUpdated');
+
+  if (S.predLoading && (!data || data.loading)) {
+    groups.innerHTML = '';
+    $('#predChips').innerHTML = '';
+    empty.classList.remove('hidden');
+    empty.querySelector('b').textContent = 'Loading the win model…';
+    empty.querySelector('span').textContent = 'Downloading previous results from ESPN. This can take a few seconds on first start.';
+    updated.textContent = 'loading model…';
+    return;
+  }
+
+  if (S.predError || !data || data.loading) {
+    groups.innerHTML = '';
+    $('#predChips').innerHTML = '';
+    empty.classList.remove('hidden');
+    empty.querySelector('b').textContent = S.predError ? 'Win model unavailable.' : 'Win model is loading…';
+    empty.querySelector('span').textContent = S.predError || 'The first ESPN download is still running. The page will update automatically.';
+    updated.textContent = 'not ready';
+    if (data && data.loading && !S.predRetry) {
+      S.predRetry = setTimeout(() => {
+        S.predRetry = null;
+        loadPredictions(false);
+      }, 5000);
+    }
+    return;
+  }
+
+  const competitions = data.competitions || [];
+  const shown = S.predComp === 'all'
+    ? competitions
+    : competitions.filter((comp) => comp.key === S.predComp);
+
+  const chips = [`<button class="lchip ${S.predComp === 'all' ? 'on' : ''}" data-pred="all">All <small>${competitions.length}</small></button>`];
+  competitions.forEach((comp) => {
+    chips.push(
+      `<button class="lchip ${S.predComp === comp.key ? 'on' : ''}" data-pred="${esc(comp.key)}">${esc(comp.name)} <small>${(comp.fixtures || []).length}</small></button>`
+    );
+  });
+  $('#predChips').innerHTML = chips.join('');
+  groups.innerHTML = shown.map(predGroup).join('');
+
+  const hasFixtures = shown.some((comp) => (comp.fixtures || []).length);
+  empty.classList.toggle('hidden', hasFixtures);
+  if (!hasFixtures) {
+    empty.querySelector('b').textContent = 'No upcoming fixtures.';
+    empty.querySelector('span').textContent = 'The model has results, but the feed has not published the next round yet.';
+  }
+
+  const generated = data.generated_at ? timeOnly(data.generated_at) : '—';
+  updated.textContent = `updated ${generated}${data.stale ? ' · stale' : ''}`;
+}
+
+async function loadPredictions(force = false) {
+  if (force) {
+    try {
+      await api('/api/predictions/refresh', { method: 'POST' });
+    } catch (err) {
+      S.predError = err.message;
+    }
+  }
+  S.predLoading = true;
+  renderPredictions();
+  try {
+    S.predictions = await api('/api/predictions');
+    S.predError = null;
+    if (S.predRetry) {
+      clearTimeout(S.predRetry);
+      S.predRetry = null;
+    }
+  } catch (err) {
+    S.predError = err.message;
+  } finally {
+    S.predLoading = false;
+    renderPredictions();
+  }
+}
+
 function render(d) {
   renderStats(d);
   renderCards(d);
@@ -381,6 +535,26 @@ function bindControls() {
     if (!chip) return;
     S.league = chip.dataset.league || 'all';
     if (S.data) renderCards(S.data);
+  });
+
+  $('#predChips').addEventListener('click', (event) => {
+    const chip = event.target.closest('[data-pred]');
+    if (!chip) return;
+    S.predComp = chip.dataset.pred || 'all';
+    renderPredictions();
+  });
+
+  $('#predRefresh').addEventListener('click', async () => {
+    const button = $('#predRefresh');
+    button.disabled = true;
+    button.textContent = 'Refreshing…';
+    await loadPredictions(true);
+    setTimeout(() => loadPredictions(false), 4000);
+    setTimeout(() => loadPredictions(false), 15000);
+    setTimeout(() => {
+      button.disabled = false;
+      button.textContent = 'Refresh model';
+    }, 16000);
   });
 
   $('#notify').checked = S.notify;
@@ -528,5 +702,7 @@ document.addEventListener('click', async (event) => {
 /* ------------------------------------------------------------------ boot */
 bindControls();
 poll();
+loadPredictions();
 setInterval(poll, 10000);
+setInterval(() => loadPredictions(false), 60000);
 setInterval(tick, 1000);

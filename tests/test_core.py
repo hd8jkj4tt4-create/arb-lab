@@ -10,6 +10,7 @@ from core import (
     implied_sum,
     italian_league,
     round_stake,
+    tracked_league,
 )
 
 
@@ -123,6 +124,19 @@ class MathTests(unittest.TestCase):
         self.assertFalse(italian_league("Primavera 1"))
         self.assertFalse(italian_league("Brazil - Serie A"))
         self.assertFalse(italian_league("England - Championship"))
+
+    def test_tracked_league_filter(self):
+        self.assertTrue(tracked_league("Italy - Serie A"))
+        self.assertTrue(tracked_league("UEFA Champions League"))
+        self.assertTrue(tracked_league("Spain - LaLiga"))
+        self.assertTrue(tracked_league("International - UEFA Champions League"))
+        self.assertTrue(tracked_league("NBA"))
+        self.assertFalse(tracked_league("Champions League Women"))
+        self.assertFalse(tracked_league("NBA G League"))
+        self.assertFalse(tracked_league("NBA All-Star"))
+        self.assertFalse(tracked_league("Spain - LaLiga 2"))
+        self.assertFalse(tracked_league("Premier League"))
+        self.assertFalse(tracked_league("Brazil - Serie A"))
 
 
 if __name__ == "__main__":

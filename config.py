@@ -39,8 +39,10 @@ class Config:
     regions: str = "eu"
     bookmakers: list[str] = field(default_factory=list)
     sports: list[str] = field(default_factory=list)
+    odds_api_io_sports: list[str] = field(default_factory=list)
     leagues: list[str] = field(default_factory=list)
     poll_seconds: int = 300
+    predictions_refresh_hours: int = 6
     bankroll: float = 1000.0
     threshold: float = 0.985
     min_stake: float = 0.5
@@ -58,9 +60,11 @@ class Config:
         cfg.odds_api_io_key = os.getenv("ODDS_API_IO_KEY", "").strip()
         cfg.regions = os.getenv("REGIONS", "eu").strip() or "eu"
         cfg.bookmakers = _csv(os.getenv("BOOKMAKERS"))
-        cfg.sports = _csv(os.getenv("SPORTS")) or list(ITALY_SPORTS.keys())
+        cfg.sports = _csv(os.getenv("SPORTS")) or list(SPORTS.keys())
+        cfg.odds_api_io_sports = _csv(os.getenv("ODDS_API_IO_SPORTS")) or ["football", "basketball"]
         cfg.leagues = _csv(os.getenv("LEAGUES"))
         cfg.poll_seconds = max(30, int(os.getenv("POLL_SECONDS", "300")))
+        cfg.predictions_refresh_hours = max(1, int(os.getenv("PREDICTIONS_REFRESH_HOURS", "6")))
         cfg.bankroll = float(os.getenv("BANKROLL", "1000"))
         cfg.threshold = float(os.getenv("THRESHOLD", "0.985"))
         cfg.min_stake = float(os.getenv("MIN_STAKE", "0.5"))
@@ -71,4 +75,4 @@ class Config:
 
 
 # Imported late to keep Config independent from core's dataclasses.
-from core import ITALY_SPORTS  # noqa: E402
+from core import SPORTS  # noqa: E402

@@ -21,7 +21,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from core import (
-    DRAW, ITALY_SPORTS, BestPrice, BookLine, Evaluation, Event,
+    DRAW, SPORTS, BestPrice, BookLine, Evaluation, Event,
     round_stake,
 )
 import core
@@ -66,7 +66,7 @@ def http_json(url: str, timeout: int = 25) -> tuple[Any, dict[str, str]]:
 # ---------------------------------------------------------------------------
 
 DEMO_FIXTURES = [
-    # id, league, home, away, true 1X2 probabilities
+    # id, league, home, away, true 1X2 probabilities (2 values = no draw)
     ("demo-1", "Serie A", "Inter", "Milan", (0.42, 0.30, 0.28)),
     ("demo-2", "Serie A", "Juventus", "Roma", (0.44, 0.28, 0.28)),
     ("demo-3", "Serie A", "Napoli", "Atalanta", (0.45, 0.27, 0.28)),
@@ -75,6 +75,12 @@ DEMO_FIXTURES = [
     ("demo-6", "Serie B", "Parma", "Cremonese", (0.38, 0.31, 0.31)),
     ("demo-7", "Coppa Italia", "Bologna", "Torino", (0.43, 0.29, 0.28)),
     ("demo-8", "Coppa Italia", "Atalanta", "Genoa", (0.51, 0.26, 0.23)),
+    ("demo-9", "Champions League", "Real Madrid", "Manchester City", (0.38, 0.28, 0.34)),
+    ("demo-10", "Champions League", "Bayern Munich", "Paris Saint-Germain", (0.44, 0.27, 0.29)),
+    ("demo-11", "La Liga", "Barcelona", "Atletico Madrid", (0.48, 0.27, 0.25)),
+    ("demo-12", "La Liga", "Real Madrid", "Sevilla", (0.55, 0.25, 0.20)),
+    ("demo-13", "NBA", "Los Angeles Lakers", "Boston Celtics", (0.47, 0.53)),
+    ("demo-14", "NBA", "Golden State Warriors", "Denver Nuggets", (0.45, 0.55)),
 ]
 
 DEMO_BOOKS = [
@@ -93,6 +99,7 @@ DEMO_BOOSTS = {
     "demo-3": ("snai", "Atalanta", 1.14),
     "demo-6": ("eurobet", "Parma", 1.15),
     "demo-8": ("lottomatica", "Atalanta", 1.14),
+    "demo-13": ("sisal", "Los Angeles Lakers", 1.08),
 }
 
 def _demo_start() -> datetime:
@@ -104,13 +111,16 @@ def _demo_start() -> datetime:
 
 class DemoProvider:
     key = "demo"
-    label = "Demo (simulated Italian football)"
+    label = "Demo (simulated football & NBA)"
 
     def fetch(self, cfg) -> ProviderResult:
         return ProviderResult(
             events=self._events(cfg),
             meta={"provider": "demo", "quota": None, "simulated": True},
-            warnings=["Demo data: not real odds. Add an API key for live Italian football."],
+            warnings=[
+                "Demo odds are simulated. Predictions use real ESPN results; "
+                "add an API key for live odds."
+            ],
         )
 
     def _events(self, cfg) -> list[Event]:
@@ -119,11 +129,12 @@ class DemoProvider:
         events: list[Event] = []
         for index, (event_id, league, home, away, probs) in enumerate(DEMO_FIXTURES):
             kickoff = start + timedelta(hours=index * 2)
+            labels = (home, away) if len(probs) == 2 else (home, DRAW, away)
             books: list[BookLine] = []
             for book_key, title, base_margin, href in DEMO_BOOKS:
                 rng = random.Random(f"{event_id}:{book_key}:{minute_bucket}")
                 odds: dict[str, float] = {}
-                for label, p in zip((home, DRAW, away), probs):
+                for label, p in zip(labels, probs):
                     margin = base_margin + rng.uniform(-0.008, 0.008)
                     price = (1.0 / p) * (1.0 - margin) * math.exp(rng.gauss(0, 0.025))
                     price *= math.exp(rng.gauss(0, 0.004))  # small tick every poll
@@ -221,7 +232,7 @@ class TheOddsAPIProvider:
 
     def _parse_event(self, item: dict[str, Any]) -> Event | None:
         sport_key = item.get("sport_key", "")
-        league = ITALY_SPORTS.get(sport_key, item.get("sport_title", "Italy"))
+        league = SPORTS.get(sport_key, item.get("sport_title", sport_key or "Other"))
         home = item.get("home_team") or "Home"
         away = item.get("away_team") or "Away"
         books: list[BookLine] = []
@@ -272,10 +283,17 @@ class OddsApiIoProvider:
     key = "oddsapiio"
     label = "Odds-API.io (ADM books incl. Sisal)"
 
-    def __init__(self, api_key: str, bookmakers: list[str], markets: str = "ML"):
+    def __init__(
+        self,
+        api_key: str,
+        bookmakers: list[str],
+        markets: str = "ML",
+        sports: list[str] | None = None,
+    ):
         self.api_key = api_key
         self.bookmakers = bookmakers
         self.markets = markets
+        self.sports = sports or ["football", "basketball"]
 
     def fetch(self, cfg) -> ProviderResult:
         if not self.api_key:
@@ -286,30 +304,48 @@ class OddsApiIoProvider:
                 "BOOKMAKERS=Sisal IT,Snai IT"
             )
 
-        params = {
-            "apiKey": self.api_key,
-            "bookmakers": ",".join(self.bookmakers),
-            "sport": "football",
-            "markets": self.markets,
-            "includeEventDetails": "true",
-            "limit": "500",
-        }
-        url = f"{ODDS_API_IO}/arbitrage-bets?" + urllib.parse.urlencode(params)
-        data, headers = http_json(url)
-        if not isinstance(data, list):
-            raise ProviderError(f"Unexpected response from odds-api.io: {str(data)[:300]}")
-
         arbs: list[Evaluation] = []
+        warnings: list[str] = []
+        headers_seen: dict[str, str] = {}
+        scanned = 0
         skipped = 0
-        for row in data:
-            event = row.get("event") or {}
-            league = event.get("league") or "Italy"
-            if not core.italian_league(league):
-                skipped += 1
+        failed = 0
+
+        for sport in self.sports:
+            params = {
+                "apiKey": self.api_key,
+                "bookmakers": ",".join(self.bookmakers),
+                "sport": sport,
+                "markets": self.markets,
+                "includeEventDetails": "true",
+                "limit": "500",
+            }
+            url = f"{ODDS_API_IO}/arbitrage-bets?" + urllib.parse.urlencode(params)
+            try:
+                data, headers = http_json(url)
+            except ProviderError as exc:
+                failed += 1
+                warnings.append(f"{sport}: {exc}")
                 continue
-            converted = self._convert(row, cfg)
-            if converted is not None:
-                arbs.append(converted)
+            if not isinstance(data, list):
+                failed += 1
+                warnings.append(f"{sport}: unexpected response {str(data)[:200]}")
+                continue
+
+            headers_seen = headers or headers_seen
+            scanned += len(data)
+            for row in data:
+                event = row.get("event") or {}
+                league = event.get("league") or ""
+                if not core.tracked_league(league):
+                    skipped += 1
+                    continue
+                converted = self._convert(row, cfg)
+                if converted is not None:
+                    arbs.append(converted)
+
+        if failed == len(self.sports) and not arbs:
+            raise ProviderError("; ".join(warnings) or "odds-api.io request failed")
 
         arbs.sort(key=lambda e: e.s)
         return ProviderResult(
@@ -317,22 +353,24 @@ class OddsApiIoProvider:
             meta={
                 "provider": "oddsapiio",
                 "quota": {
-                    "remaining": headers.get("x-ratelimit-remaining"),
-                    "used": headers.get("x-ratelimit-used"),
+                    "remaining": headers_seen.get("x-ratelimit-remaining"),
+                    "used": headers_seen.get("x-ratelimit-used"),
                     "last_cost": None,
                 },
                 "books": self.bookmakers,
-                "scanned": len(data),
-                "skipped_non_italian": skipped,
+                "scanned": scanned,
+                "skipped_untracked": skipped,
             },
-            warnings=[] if arbs else ["No Italian arbitrage right now (or your plan does not include these books)."],
+            warnings=warnings + (
+                [] if arbs else ["No tracked arbitrage right now (or your plan does not include these books)."]
+            ),
         )
 
     def _convert(self, row: dict[str, Any], cfg) -> Evaluation | None:
         event = row.get("event") or {}
         home = event.get("home") or "Home"
         away = event.get("away") or "Away"
-        league = event.get("league") or "Italy"
+        league = event.get("league") or "Other"
         market_info = row.get("market") or {}
         market_name = market_info.get("name") or "ML"
         hdp = market_info.get("hdp")
@@ -452,5 +490,9 @@ def get_provider(cfg):
     if provider in ("theoddsapi", "odds_api", "the-odds-api"):
         return TheOddsAPIProvider(cfg.odds_api_key, cfg.regions, cfg.bookmakers, cfg.sports)
     if provider in ("oddsapiio", "odds-api-io", "odds_api_io"):
-        return OddsApiIoProvider(cfg.odds_api_io_key, cfg.bookmakers)
+        return OddsApiIoProvider(
+            cfg.odds_api_io_key,
+            cfg.bookmakers,
+            sports=getattr(cfg, "odds_api_io_sports", None),
+        )
     raise ProviderError(f"Unknown PROVIDER={cfg.provider!r}. Use demo, theoddsapi or oddsapiio.")

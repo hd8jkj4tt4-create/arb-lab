@@ -22,7 +22,8 @@ from pathlib import Path
 from typing import Any
 
 from config import Config, load_dotenv
-from core import ITALY_SPORTS, Evaluation, implied_probabilities, utcnow
+from core import SPORTS, Evaluation, implied_probabilities, utcnow
+from predictions import PredictionService
 from providers import DemoProvider, ProviderError, get_provider
 from store import Settings, Store
 
@@ -40,6 +41,7 @@ load_dotenv()
 CFG = Config.from_env()
 SETTINGS = Settings(CFG.settings_path)
 STORE = Store(CFG.db_path)
+PREDICTIONS = PredictionService()
 
 try:
     PROVIDER = get_provider(CFG)
@@ -220,7 +222,8 @@ def build_payload() -> dict[str, Any]:
         "config": {
             "regions": CFG.regions,
             "bookmakers": CFG.bookmakers,
-            "sports": [ITALY_SPORTS.get(s, s) for s in CFG.sports],
+            "sports": [SPORTS.get(s, s) for s in CFG.sports],
+            "predictions_refresh_hours": CFG.predictions_refresh_hours,
             "has_odds_api_key": bool(CFG.odds_api_key),
             "has_odds_api_io_key": bool(CFG.odds_api_io_key),
             "telegram": bool(CFG.telegram_token and CFG.telegram_chat),
@@ -286,6 +289,21 @@ def poll_loop() -> None:
 
         WAKE.wait(timeout=delay)
         WAKE.clear()
+
+
+def predictions_loop() -> None:
+    """Refresh the win-probability model independently from odds polling."""
+    normal_delay = max(1, CFG.predictions_refresh_hours) * 3600
+    while True:
+        delay = normal_delay
+        try:
+            snapshot = PREDICTIONS.refresh()
+            fixtures = sum(len(c.get("fixtures") or []) for c in snapshot.get("competitions", []))
+            log.info("predictions updated: %d competitions, %d fixtures", len(snapshot.get("competitions", [])), fixtures)
+        except Exception as exc:  # noqa: BLE001 - keep the thread alive
+            log.warning("predictions refresh failed: %s", exc)
+            delay = 900
+        time.sleep(delay)
 
 
 # ---------------------------------------------------------------------------
@@ -378,6 +396,10 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json(response)
             return
 
+        if path == "/api/predictions":
+            self.send_json(PREDICTIONS.snapshot())
+            return
+
         if path == "/api/history":
             query = urllib.parse.parse_qs(parsed.query)
             try:
@@ -422,7 +444,13 @@ class Handler(BaseHTTPRequestHandler):
 
         if path == "/api/refresh":
             WAKE.set()
+            PREDICTIONS.request_refresh()
             self.send_json({"ok": True, "message": "refresh requested"})
+            return
+
+        if path == "/api/predictions/refresh":
+            started = PREDICTIONS.request_refresh()
+            self.send_json({"ok": True, "started": started})
             return
 
         if path == "/api/settings":
@@ -465,6 +493,9 @@ def main() -> None:
 
     thread = threading.Thread(target=poll_loop, name="poller", daemon=True)
     thread.start()
+
+    predictions_thread = threading.Thread(target=predictions_loop, name="predictions", daemon=True)
+    predictions_thread.start()
 
     host = os.getenv("HOST", "127.0.0.1")
     server = ThreadingHTTPServer((host, CFG.port), Handler)

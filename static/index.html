@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Arb Lab — Italian football scanner</title>
+<title>Arb Lab — football &amp; NBA scanner</title>
 <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
@@ -14,7 +14,7 @@
       <div class="mark" aria-hidden="true">A</div>
       <div>
         <h1>Arb Lab</h1>
-        <p>Italian football · automatic cross-book scanner</p>
+        <p>Football &amp; NBA · arbitrage scanner + win model</p>
       </div>
     </div>
     <div class="top-right">
@@ -26,13 +26,13 @@
   </header>
 
   <div id="demoBanner" class="banner demo hidden">
-    <b>Demo mode.</b> Odds are simulated. For live data set <code>PROVIDER=theoddsapi</code> + <code>ODDS_API_KEY</code> (EU books) or <code>PROVIDER=oddsapiio</code> + <code>ODDS_API_IO_KEY</code> + <code>BOOKMAKERS=Sisal IT,Snai IT</code> in <code>.env</code>, then restart.
+    <b>Demo mode.</b> Odds are simulated; win probabilities use real ESPN results. For live odds set <code>PROVIDER=theoddsapi</code> + <code>ODDS_API_KEY</code> (EU books) or <code>PROVIDER=oddsapiio</code> + <code>ODDS_API_IO_KEY</code> + <code>BOOKMAKERS=Sisal IT,Snai IT</code> in <code>.env</code>, then restart.
   </div>
   <div id="sourceNote" class="banner info hidden"></div>
   <div id="errorBanner" class="banner error hidden"></div>
 
   <section class="stats" aria-label="Summary">
-    <div class="stat"><span>Matches</span><b id="statEvents">—</b><small>Italian football</small></div>
+    <div class="stat"><span>Matches</span><b id="statEvents">—</b><small>tracked competitions</small></div>
     <div class="stat"><span>Arbs</span><b id="statArbs">—</b><small id="arbsHint">S &lt; 1.000</small></div>
     <div class="stat"><span>Best margin</span><b id="statBest">—</b><small id="bestHint">before rounding</small></div>
     <div class="stat"><span>Next scan</span><b id="statNext">—</b><small id="pollLabel">—</small></div>
@@ -64,6 +64,25 @@
 
   <div class="league-chips" id="leagueChips" role="group" aria-label="League filter"></div>
 
+  <section class="section predictions" id="predictionsSection">
+    <div class="section-head">
+      <h2>Win probabilities <span class="model-tag">model</span></h2>
+      <div class="pred-head-actions">
+        <span id="predUpdated">loading model…</span>
+        <button class="btn small" id="predRefresh" type="button">Refresh model</button>
+      </div>
+    </div>
+    <div class="league-chips pred-chips" id="predChips" role="group" aria-label="Competition filter"></div>
+    <div id="predGroups" class="pred-groups"></div>
+    <div id="predEmpty" class="empty hidden">
+      <b>Win model not ready.</b>
+      <span>The first ESPN download can take a few seconds. The scanner keeps working while it loads.</span>
+    </div>
+    <div class="pred-note" id="predNote">
+      Football: time-weighted Dixon–Coles Poisson. NBA: time-weighted point-margin ratings. Based on previous results only — no lineups, injuries or market prices. Not betting advice.
+    </div>
+  </section>
+
   <section class="section">
     <div class="section-head">
       <h2>Live opportunities</h2>
@@ -76,7 +95,7 @@
     </div>
     <div id="loading" class="empty">
       <b>First scan in progress…</b>
-      <span>Fetching Italian football odds. This usually takes a few seconds.</span>
+      <span>Fetching odds for the tracked football and NBA competitions. This usually takes a few seconds.</span>
     </div>
   </section>
 
