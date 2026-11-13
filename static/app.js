@@ -451,18 +451,21 @@ function injuryRow(row, maxDays, showComp) {
       ? 'due back'
       : `back in ${Number(row.days_left)}d`;
   const competition = showComp ? `<em class="inj-comp">${esc(row.competition)}</em>` : '';
+  const position = row.position
+    ? `<em class="inj-pos">${esc(row.position)}</em>`
+    : '<em class="inj-pos unknown">position n/a</em>';
   const source = row.url
     ? `<a href="${esc(row.url)}" target="_blank" rel="noopener noreferrer">${esc(row.player)}</a>`
     : esc(row.player);
   const tip = [
-    `${row.player} — ${row.team}`,
+    `${row.player} — ${row.team}${row.position ? ` (${row.position})` : ''}`,
     `${row.injury} · ${row.status}`,
     `${outLabel}${row.since ? ` (since ${shortDate(row.since)})` : ''} · ${left}`,
     row.note || '',
   ].filter(Boolean).join('\n');
   return `<div class="inj-row" title="${esc(tip)}">
     <div class="inj-main">
-      <b>${source}</b>${competition}
+      <b>${source}</b>${competition}${position}
       <span>${esc(row.team)} · ${esc(row.injury)}</span>
     </div>
     <div class="inj-track"><i class="inj-bar ${esc(severity)}" style="width:${width.toFixed(2)}%"></i></div>
@@ -536,7 +539,7 @@ function renderInjuries(comps) {
   $('#injAllSummary').textContent = `All ${rows.length} injuries`;
   allList.innerHTML = rows.map((row) => `<div class="inj-all-row">
     <span>${esc(row.player)}</span>
-    <em>${esc(row.team)} · ${esc(row.injury)}</em>
+    <em>${esc(row.team)}${row.position ? ` · ${esc(row.position)}` : ''} · ${esc(row.injury)}</em>
     <b>${Number(row.days_out) || 0}d out · ${row.days_left == null ? 'return unknown' : `back in ${Number(row.days_left)}d`}</b>
   </div>`).join('');
   $('#injUpdated').textContent = `${rows.length} players${showComp ? ' · all competitions' : ` · ${comps[0].name}`}`;

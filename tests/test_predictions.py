@@ -455,10 +455,12 @@ class InjuryTests(unittest.TestCase):
         self.assertEqual(len(rows), 2)
         self.assertEqual(rows[0]["player"], "Marcus Thuram")
         self.assertEqual(rows[0]["team"], "Inter Milan")
+        self.assertEqual(rows[0]["position"], "Centre-Forward")
         self.assertEqual(rows[0]["injury"], "Hamstring injury")
         self.assertEqual(rows[0]["since"], "2026-11-09")
         self.assertEqual(rows[0]["until"], "2026-12-01")
         self.assertTrue(rows[0]["url"].startswith("https://www.transfermarkt.us/"))
+        self.assertEqual(rows[1]["position"], "Right-Back")
         self.assertIsNone(rows[1]["until"])
 
     def test_team_aliases_match_espn_names(self):
@@ -501,8 +503,10 @@ class InjuryTests(unittest.TestCase):
             url="",
             source="Transfermarkt",
             basis="injury",
+            position="Centre-Forward",
             now=NOW,
         )
+        self.assertEqual(record["position"], "Centre-Forward")
         self.assertEqual(record["days_out"], 10)
         self.assertEqual(record["days_left"], 9)
         self.assertEqual(record["total_days"], 19)
@@ -521,6 +525,7 @@ class InjuryTests(unittest.TestCase):
                             "athlete": {
                                 "id": "538842",
                                 "displayName": "Mouhamed Gueye",
+                                "position": {"name": "Forward", "displayName": "Forward"},
                             },
                             "details": {
                                 "side": "Left",
@@ -545,6 +550,7 @@ class InjuryTests(unittest.TestCase):
         self.assertEqual(rows[0]["player"], "Mouhamed Gueye")
         self.assertEqual(rows[0]["team"], "Atlanta Hawks")
         self.assertEqual(rows[0]["team_id"], "1")
+        self.assertEqual(rows[0]["position"], "Forward")
         self.assertEqual(rows[0]["injury"], "Left Foot Fracture")
         self.assertEqual(rows[0]["until"], "2026-12-12")
         self.assertIn("espn.com/nba/player", rows[0]["url"])

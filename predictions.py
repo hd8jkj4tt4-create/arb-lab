@@ -629,6 +629,12 @@ def parse_transfermarkt_injuries(text: str) -> list[dict[str, Any]]:
         player = unescape(name_match.group(1) if name_match else re.sub(r"<[^>]+>", "", inner)).strip()
         href_match = re.search(r'href="([^"]+)"', attrs)
         href = href_match.group(1) if href_match else ""
+        position_match = re.search(
+            r'class="hauptlink">.*?</tr>\s*<tr>\s*<td>\s*([^<]+?)\s*</td>',
+            part,
+            re.S,
+        )
+        position = unescape(position_match.group(1)).strip() if position_match else ""
 
         club = None
         for anchor in re.findall(r"<a [^>]+>", part):
@@ -651,6 +657,7 @@ def parse_transfermarkt_injuries(text: str) -> list[dict[str, Any]]:
             {
                 "player": player,
                 "team": club,
+                "position": position,
                 "injury": injury or "Unknown injury",
                 "since": _tm_date(dates[0][0] + f" {dates[0][1]}, {dates[0][2]}") if dates else None,
                 "until": (
@@ -787,6 +794,7 @@ def _injury_record(
     url: str,
     source: str,
     basis: str,
+    position: str = "",
     note: str = "",
     now: datetime,
 ) -> dict[str, Any]:
@@ -798,6 +806,7 @@ def _injury_record(
     return {
         "player": player,
         "team": team,
+        "position": position,
         "status": status,
         "injury": injury,
         "severity": severity,
@@ -841,7 +850,9 @@ def load_football_injuries(
     cached = cache.get(cache_key) or {}
     timestamp = time.time()
     rows = list(cached.get("rows") or [])
-    if timestamp - float(cached.get("fetched") or 0) > max_age:
+    # Cached feeds written before positions were added are refreshed once.
+    outdated = bool(rows) and any("position" not in row for row in rows)
+    if outdated or timestamp - float(cached.get("fetched") or 0) > max_age:
         try:
             rows = parse_transfermarkt_injuries(fetch_text(url))
         except Exception as exc:  # noqa: BLE001 - injuries are best effort
@@ -870,6 +881,7 @@ def load_football_injuries(
             _injury_record(
                 player=str(row.get("player") or ""),
                 team=team,
+                position=str(row.get("position") or ""),
                 status="Injured",
                 injury=str(row.get("injury") or "Unknown injury"),
                 since=row.get("since"),
@@ -906,11 +918,15 @@ def parse_nba_injuries(data: dict[str, Any]) -> list[dict[str, Any]]:
             ]
             injury = " ".join(pieces) or "Undisclosed"
             athlete_id = str(athlete.get("id") or "").strip()
+            position = athlete.get("position") or {}
             rows.append(
                 {
                     "player": player,
                     "team": team,
                     "team_id": team_id or str((athlete.get("team") or {}).get("id") or ""),
+                    "position": str(
+                        position.get("displayName") or position.get("name") or ""
+                    ).strip(),
                     "status": status,
                     "injury": injury,
                     "since": entry.get("date"),
@@ -939,7 +955,9 @@ def load_nba_injuries(
     cached = cache.get(cache_key) or {}
     timestamp = time.time()
     rows = list(cached.get("rows") or [])
-    if timestamp - float(cached.get("fetched") or 0) > max_age:
+    # Cached feeds written before positions were added are refreshed once.
+    outdated = bool(rows) and any("position" not in row for row in rows)
+    if outdated or timestamp - float(cached.get("fetched") or 0) > max_age:
         try:
             data = fetch_json(f"{ESPN}/basketball/nba/injuries")
             rows = parse_nba_injuries(data if isinstance(data, dict) else {})
@@ -957,6 +975,7 @@ def load_nba_injuries(
         _injury_record(
             player=str(row.get("player") or ""),
             team=str(row.get("team") or ""),
+            position=str(row.get("position") or ""),
             status=str(row.get("status") or "Out"),
             injury=str(row.get("injury") or "Undisclosed"),
             since=row.get("since"),

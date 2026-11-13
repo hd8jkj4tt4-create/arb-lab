@@ -66,8 +66,9 @@ Serie A, La Liga, Champions League and the NBA.
 ## Injury report
 
 A separate chart lists players unavailable for the clubs in the upcoming
-fixtures: player, club, injury, status, days out, expected return date and a
-short/medium/long absence estimate. It is **not** an input to the win model.
+fixtures: player, **position**, club, injury, status, days out, expected return
+date and a short/medium/long absence estimate. It is **not** an input to the
+win model.
 
 - **Football:** [Transfermarkt's injury tables](https://www.transfermarkt.us)
   for Serie A, La Liga and the Champions League. The page provides the injury
