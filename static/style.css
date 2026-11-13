@@ -265,6 +265,14 @@ details.detail[open] summary::before{transform:rotate(90deg)}
 /* injury report */
 .injuries .section-head{margin-bottom:7px}
 .inj-intro{font-size:10px;line-height:1.55;color:var(--dim);margin:0 0 8px;max-width:920px}
+.inj-tools{display:flex;align-items:flex-end;gap:10px;flex-wrap:wrap;margin:0 0 9px}
+.inj-search{display:flex;flex-direction:column;gap:4px;min-width:230px;flex:0 1 320px}
+.inj-search span{font-size:9px;letter-spacing:.09em;text-transform:uppercase;color:var(--dim);font-weight:750}
+.inj-search input{background:#0a111b;border:1px solid var(--line);border-radius:9px;padding:7px 10px;font-size:11px;transition:border-color .15s,box-shadow .15s;width:100%}
+.inj-search input:hover{border-color:#2c405f}
+.inj-search input:focus{outline:none;border-color:#3b6ea8;box-shadow:0 0 0 3px rgba(96,165,250,.14)}
+.inj-search-note{font-size:9.5px;color:var(--dim);padding-bottom:8px}
+.inj-none{padding:10px 11px;border:1px dashed rgba(34,49,74,.7);border-radius:8px;font-size:10px;color:var(--dim)}
 .inj-legend{display:flex;gap:12px;flex-wrap:wrap;margin-bottom:9px;font-size:9.5px;color:var(--dim)}
 .inj-legend span{display:inline-flex;align-items:center;gap:4px;white-space:nowrap}
 .inj-dot{width:7px;height:7px;border-radius:2px;display:inline-block}

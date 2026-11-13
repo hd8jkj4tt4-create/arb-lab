@@ -81,6 +81,8 @@ win model.
   It is an absence estimate, not a medical diagnosis.
 - **Clubs:** Transfermarkt club names are normalised to the ESPN names used in
   the fixtures; only clubs playing in the next 14 days are shown.
+- **Search:** type a team (or player) in the injury search box to list every
+  injured player from the matching clubs, with full details.
 - **Caching:** injury feeds refresh every 6 hours and are stored in
   `data/injuries.json`, so a temporary block does not remove the last report.
 

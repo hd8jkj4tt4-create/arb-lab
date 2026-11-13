@@ -16,6 +16,8 @@ const S = {
   byId: new Map(),
   predictions: null,
   predComp: 'all',
+  injQuery: '',
+  injComps: [],
   predLoading: false,
   predError: null,
   predRetry: null,
@@ -432,6 +434,14 @@ function predRow(fixture) {
 /* ------------------------------------------------------------- injuries */
 const injuryRank = { long: 3, medium: 2, short: 1, unknown: 0 };
 
+function searchKey(value) {
+  return String(value || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .trim();
+}
+
 function shortDate(iso) {
   if (!iso) return '—';
   const d = new Date(`${iso}T00:00:00Z`);
@@ -522,27 +532,49 @@ function renderInjuries(comps) {
     return;
   }
   section.classList.remove('hidden');
+  S.injComps = comps;
   rows.sort((a, b) => (
     (injuryRank[b.severity] || 0) - (injuryRank[a.severity] || 0)
     || (Number(b.total_days) || 0) - (Number(a.total_days) || 0)
     || String(a.player).localeCompare(String(b.player))
   ));
-  const showComp = S.predComp === 'all';
-  const top = showComp
-    ? comps.flatMap((comp) => pickInjuryRows(
-      rows.filter((row) => row.competition === comp.name),
-      6,
+  const query = searchKey(S.injQuery);
+  const matching = query
+    ? rows.filter((row) => (
+      searchKey(row.team).includes(query) || searchKey(row.player).includes(query)
     ))
-    : pickInjuryRows(rows, 16);
+    : rows;
+  if (query) matching.sort((a, b) => String(a.team).localeCompare(String(b.team)));
+  const showComp = S.predComp === 'all';
+  const top = query
+    ? matching
+    : showComp
+      ? comps.flatMap((comp) => pickInjuryRows(
+        rows.filter((row) => row.competition === comp.name),
+        6,
+      ))
+      : pickInjuryRows(rows, 16);
   const maxDays = Math.max(...top.map((row) => Number(row.total_days) || 0), 7);
-  chart.innerHTML = top.map((row) => injuryRow(row, maxDays, showComp)).join('');
-  $('#injAllSummary').textContent = `All ${rows.length} injuries`;
-  allList.innerHTML = rows.map((row) => `<div class="inj-all-row">
+  chart.innerHTML = top.length
+    ? top.map((row) => injuryRow(row, maxDays, showComp)).join('')
+    : `<div class="inj-none">No injured player matches “${esc(S.injQuery.trim())}”.</div>`;
+  const listRows = query ? matching : rows;
+  $('#injAllSummary').textContent = query
+    ? `${matching.length} matching ${matching.length === 1 ? 'injury' : 'injuries'}`
+    : `All ${rows.length} injuries`;
+  $('#injAll').classList.toggle('hidden', Boolean(query) || !listRows.length);
+  allList.innerHTML = listRows.map((row) => `<div class="inj-all-row">
     <span>${esc(row.player)}</span>
     <em>${esc(row.team)}${row.position ? ` · ${esc(row.position)}` : ''} · ${esc(row.injury)}</em>
     <b>${Number(row.days_out) || 0}d out · ${row.days_left == null ? 'return unknown' : `back in ${Number(row.days_left)}d`}</b>
   </div>`).join('');
-  $('#injUpdated').textContent = `${rows.length} players${showComp ? ' · all competitions' : ` · ${comps[0].name}`}`;
+  const clubs = new Set(matching.map((row) => row.team)).size;
+  $('#injSearchNote').textContent = query
+    ? `${matching.length} of ${rows.length} players · ${clubs} ${clubs === 1 ? 'club' : 'clubs'}`
+    : '';
+  $('#injUpdated').textContent = query
+    ? `${matching.length} matching players`
+    : `${rows.length} players${showComp ? ' · all competitions' : ` · ${comps[0].name}`}`;
 }
 
 function predGroup(comp) {
@@ -720,6 +752,11 @@ function bindControls() {
     if (!chip) return;
     S.predComp = chip.dataset.pred || 'all';
     renderPredictions();
+  });
+
+  $('#injSearch').addEventListener('input', (event) => {
+    S.injQuery = event.target.value;
+    renderInjuries(S.injComps);
   });
 
   $('#predRefresh').addEventListener('click', async () => {
