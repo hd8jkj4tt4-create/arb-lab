@@ -73,14 +73,37 @@
       </div>
     </div>
     <div class="league-chips pred-chips" id="predChips" role="group" aria-label="Competition filter"></div>
-    <p class="pred-intro">Trained only on completed matches with final scores from ESPN. Showing games scheduled in the next 14 days; click a match to verify it on ESPN. Expand a row for probable scorers, exact results, corners, fouls and made 3s. NBA rows add a projected exact score and each team's top scorer.</p>
+    <p class="pred-intro">Trained only on completed matches with final scores from ESPN. Showing games scheduled in the next 14 days; click a match to verify it on ESPN. Expand a row for probable scorers, exact results, corners, fouls and made 3s. NBA rows add a projected exact score and each team's top scorer. The injury report below lists players unavailable for these fixtures.</p>
     <div id="predGroups" class="pred-groups"></div>
     <div id="predEmpty" class="empty hidden">
       <b>Win model not ready.</b>
       <span>The first ESPN download can take a few seconds. The scanner keeps working while it loads.</span>
     </div>
     <div class="pred-note" id="predNote">
-      Football: time-weighted Dixon–Coles Poisson. NBA: time-weighted point-margin ratings. Based on previous results only — no lineups, injuries or market prices. Not betting advice.
+      Football: time-weighted Dixon–Coles Poisson. NBA: time-weighted point-margin ratings. Based on previous results only — no lineups or market prices. Injuries are displayed separately and do not change the probabilities. Not betting advice.
+    </div>
+  </section>
+
+  <section class="section injuries hidden" id="injuriesSection">
+    <div class="section-head">
+      <h2>Injury report <span class="model-tag">live</span></h2>
+      <span id="injUpdated">—</span>
+    </div>
+    <p class="inj-intro">Current injuries for players whose teams are in the fixtures above. Bar length combines time already out with the expected time remaining; colour shows the expected absence. The chart samples short, medium and long absences; expand below for everyone. Football data from Transfermarkt, NBA from ESPN. Injuries are not inputs to the win model.</p>
+    <div class="inj-legend">
+      <span><i class="inj-dot short"></i>short ≤ 7 days</span>
+      <span><i class="inj-dot medium"></i>medium 8–28 days</span>
+      <span><i class="inj-dot long"></i>long &gt; 28 days or severe</span>
+      <span><i class="inj-dot unknown"></i>unknown return</span>
+    </div>
+    <div id="injChart" class="inj-chart"></div>
+    <details class="inj-all" id="injAll">
+      <summary id="injAllSummary">All injuries</summary>
+      <div id="injAllList" class="inj-all-list"></div>
+    </details>
+    <div id="injEmpty" class="empty hidden">
+      <b>No injury data.</b>
+      <span>The injury feeds are unavailable for these fixtures.</span>
     </div>
   </section>
 

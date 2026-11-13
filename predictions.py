@@ -19,8 +19,10 @@ import json
 import logging
 import math
 import os
+import re
 import threading
 import time
+import unicodedata
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -28,6 +30,8 @@ from collections import Counter
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from difflib import SequenceMatcher
+from html import unescape
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -40,8 +44,15 @@ CACHE_PATH = ROOT / "data" / "predictions.json"
 STATS_CACHE_PATH = ROOT / "data" / "espn_stats.json"
 ROSTER_CACHE_PATH = ROOT / "data" / "espn_rosters.json"
 NBA_LEADERS_CACHE_PATH = ROOT / "data" / "espn_nba_leaders.json"
+INJURY_CACHE_PATH = ROOT / "data" / "injuries.json"
 ESPN = "https://site.api.espn.com/apis/site/v2/sports"
 ESPN_CORE = "https://sports.core.api.espn.com/v2/sports/basketball/leagues/nba"
+TRANSFERMARKT = "https://www.transfermarkt.us"
+TRANSFERMARKT_INJURIES = {
+    "serie_a": f"{TRANSFERMARKT}/serie-a/verletztespieler/wettbewerb/IT1/plus/1",
+    "la_liga": f"{TRANSFERMARKT}/laliga/verletztespieler/wettbewerb/ES1/plus/1",
+    "champions_league": f"{TRANSFERMARKT}/uefa-champions-league/verletztespieler/pokalwettbewerb/CL/plus/1",
+}
 
 # The model uses a 0..10 score grid for football. The factorial table keeps the
 # Poisson probability loop cheap.
@@ -153,6 +164,31 @@ def fetch_json(url: str, timeout: int = 25) -> Any:
         raise DataError(f"Network error: {exc.reason}") from exc
     except (json.JSONDecodeError, UnicodeDecodeError) as exc:
         raise DataError(f"Invalid JSON from ESPN: {exc}") from exc
+
+
+def fetch_text(url: str, timeout: int = 30) -> str:
+    """GET an HTML page with a browser-like UA (Transfermarkt blocks bots)."""
+    request = urllib.request.Request(
+        url,
+        headers={
+            "User-Agent": (
+                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36"
+            ),
+            "Accept": "text/html,application/xhtml+xml",
+            "Accept-Language": "en-US,en;q=0.9",
+            "Accept-Encoding": "identity",
+        },
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            return response.read().decode("utf-8", "replace")
+    except urllib.error.HTTPError as exc:
+        raise DataError(
+            f"HTTP {exc.code} from {urllib.parse.urlsplit(url).netloc}"
+        ) from exc
+    except urllib.error.URLError as exc:
+        raise DataError(f"Network error: {exc.reason}") from exc
 
 
 def _espn_events(path: str, dates: str) -> list[dict[str, Any]]:
@@ -540,6 +576,401 @@ def load_nba_top_scorers(
         for team_id in team_ids
         if team_id and cache_keys.get(team_id) in cache
     }
+
+
+def _load_injury_cache() -> dict[str, dict[str, Any]]:
+    try:
+        data = json.loads(INJURY_CACHE_PATH.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def _save_injury_cache(cache: dict[str, dict[str, Any]]) -> None:
+    INJURY_CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    tmp = INJURY_CACHE_PATH.with_suffix(".tmp")
+    tmp.write_text(json.dumps(cache, indent=0, sort_keys=True), encoding="utf-8")
+    os.replace(tmp, INJURY_CACHE_PATH)
+
+
+_TM_MONTHS = {
+    "Jan": 1, "Feb": 2, "Mar": 3, "Apr": 4, "May": 5, "Jun": 6,
+    "Jul": 7, "Aug": 8, "Sep": 9, "Oct": 10, "Nov": 11, "Dec": 12,
+}
+_TM_DATE = re.compile(r"\b([A-Z][a-z]{2}) (\d{1,2}), (\d{4})\b")
+
+
+def _tm_date(value: str) -> str | None:
+    match = _TM_DATE.search(value or "")
+    if not match:
+        return None
+    month = _TM_MONTHS.get(match.group(1))
+    if not month:
+        return None
+    return f"{int(match.group(3)):04d}-{month:02d}-{int(match.group(2)):02d}"
+
+
+def parse_transfermarkt_injuries(text: str) -> list[dict[str, Any]]:
+    """Parse the detailed injury table from Transfermarkt.
+
+    The page has one top-level row per player; nested tables only hold the
+    portrait and position. Splitting on the odd/even row markers keeps the
+    parser small and independent of the surrounding page markup.
+    """
+    rows: list[dict[str, Any]] = []
+    for part in re.split(r'<tr class="(?:odd|even)">', text)[1:]:
+        player_link = re.search(
+            r'class="hauptlink">\s*<a ([^>]*)>(.*?)</a>', part, re.S
+        )
+        if not player_link:
+            continue
+        attrs, inner = player_link.group(1), player_link.group(2)
+        name_match = re.search(r'title="([^"]+)"', attrs)
+        player = unescape(name_match.group(1) if name_match else re.sub(r"<[^>]+>", "", inner)).strip()
+        href_match = re.search(r'href="([^"]+)"', attrs)
+        href = href_match.group(1) if href_match else ""
+
+        club = None
+        for anchor in re.findall(r"<a [^>]+>", part):
+            if "/startseite/verein/" not in anchor:
+                continue
+            title = re.search(r'title="([^"]+)"', anchor)
+            if title:
+                club = unescape(title.group(1)).strip()
+                break
+        injury_match = re.search(r'<td class="links">(.*?)</td>', part, re.S)
+        injury = (
+            unescape(re.sub(r"<[^>]+>", "", injury_match.group(1))).strip()
+            if injury_match
+            else ""
+        )
+        dates = _TM_DATE.findall(part)
+        if not player or not club:
+            continue
+        rows.append(
+            {
+                "player": player,
+                "team": club,
+                "injury": injury or "Unknown injury",
+                "since": _tm_date(dates[0][0] + f" {dates[0][1]}, {dates[0][2]}") if dates else None,
+                "until": (
+                    _tm_date(dates[1][0] + f" {dates[1][1]}, {dates[1][2]}")
+                    if len(dates) > 1
+                    else None
+                ),
+                "url": urllib.parse.urljoin(TRANSFERMARKT, href) if href else "",
+                "source": "Transfermarkt",
+            }
+        )
+    return rows
+
+
+_TEAM_STOPWORDS = {
+    "fc", "cf", "sc", "ac", "as", "ss", "us", "ud", "rcd", "ca", "rc",
+    "club", "calcio", "de", "del", "the", "kv", "bc", "cfc", "sad", "sd",
+    "afc", "ssc", "fk", "1907", "1909", "1913", "1919", "1920", "futbol",
+    "balompie",
+}
+_TEAM_ALIASES = {
+    "internazionale": "inter",
+    "inter milan": "inter",
+    "inter": "inter",
+    "ac milan": "milan",
+    "milan": "milan",
+    "athletic club": "athletic",
+    "athletic bilbao": "athletic",
+    "deportivo alaves": "alaves",
+    "alaves": "alaves",
+    "deportivo la coruna": "deportivo",
+    "deportivo": "deportivo",
+    "rcd espanyol barcelona": "espanyol",
+    "espanyol barcelona": "espanyol",
+    "espanyol": "espanyol",
+    "ssc napoli": "napoli",
+    "napoli": "napoli",
+    "lask linz": "lask",
+    "lask": "lask",
+}
+_TRANSLITERATION = str.maketrans(
+    {"ø": "o", "Ø": "O", "ß": "ss", "ł": "l", "Ł": "L", "đ": "d", "Đ": "D", "ı": "i"}
+)
+
+
+def _normalise_team_name(name: str) -> str:
+    text = unicodedata.normalize(
+        "NFKD", str(name or "").translate(_TRANSLITERATION)
+    ).encode("ascii", "ignore").decode("ascii")
+    text = text.lower().replace("&", " and ")
+    tokens = [
+        token
+        for token in re.split(r"[^a-z0-9]+", text)
+        if token and token not in _TEAM_STOPWORDS
+    ]
+    joined = " ".join(tokens)
+    return _TEAM_ALIASES.get(joined, joined)
+
+
+def team_match_score(first: str, second: str) -> float:
+    a, b = _normalise_team_name(first), _normalise_team_name(second)
+    if not a or not b:
+        return 0.0
+    if a == b:
+        return 1.0
+    a_tokens, b_tokens = set(a.split()), set(b.split())
+    jaccard = len(a_tokens & b_tokens) / len(a_tokens | b_tokens)
+    sequence = SequenceMatcher(None, a, b).ratio() * 0.8
+    return max(jaccard, sequence)
+
+
+def match_injury_teams(
+    fixture_teams: set[str],
+    rows: list[dict[str, Any]],
+) -> dict[str, str]:
+    """Map Transfermarkt club names to the ESPN names used by the dashboard."""
+    clubs = sorted({str(row.get("team") or "") for row in rows if row.get("team")})
+    matches: dict[str, str] = {}
+    for team in sorted(fixture_teams):
+        scored = sorted(
+            ((team_match_score(team, club), club) for club in clubs),
+            reverse=True,
+        )
+        if not scored:
+            continue
+        best_score, best_club = scored[0]
+        runner_up = scored[1][0] if len(scored) > 1 else 0.0
+        if best_score >= 0.6 and best_score - runner_up >= 0.05:
+            matches[best_club] = team
+    return matches
+
+
+_SEVERE_INJURY_WORDS = (
+    "cruciate", "acl", "fracture", "broken", "surgery", "rupture",
+    "dislocation", "tear",
+)
+_MODERATE_INJURY_WORDS = (
+    "hamstring", "muscle", "muscular", "ankle", "knee", "adductor", "calf",
+    "thigh", "groin", "back", "shoulder", "hip", "foot", "metatarsal",
+    "concussion", "ligament", "tendon", "hernia", "stress",
+)
+_MINOR_INJURY_WORDS = (
+    "knock", "illness", "fatigue", "cramp", "bruise", "soreness", "cold",
+)
+_SEVERITY_RANK = {"long": 3, "medium": 2, "short": 1, "unknown": 0}
+
+
+def injury_severity(injury: str, days_left: int | None) -> str:
+    """Classify the expected absence, not the pain or medical seriousness."""
+    if days_left is not None:
+        if days_left <= 7:
+            return "short"
+        if days_left <= 28:
+            return "medium"
+        return "long"
+    text = str(injury or "").lower()
+    if any(word in text for word in _SEVERE_INJURY_WORDS):
+        return "long"
+    if any(word in text for word in _MINOR_INJURY_WORDS):
+        return "short"
+    if any(word in text for word in _MODERATE_INJURY_WORDS):
+        return "medium"
+    return "unknown"
+
+
+def _injury_record(
+    *,
+    player: str,
+    team: str,
+    status: str,
+    injury: str,
+    since: str | None,
+    until: str | None,
+    url: str,
+    source: str,
+    basis: str,
+    note: str = "",
+    now: datetime,
+) -> dict[str, Any]:
+    since_dt = _parse_date(since)
+    until_dt = _parse_date(until)
+    days_out = max(0, (now.date() - since_dt.date()).days) if since_dt else 0
+    days_left = max(0, (until_dt.date() - now.date()).days) if until_dt else None
+    severity = injury_severity(injury, days_left)
+    return {
+        "player": player,
+        "team": team,
+        "status": status,
+        "injury": injury,
+        "severity": severity,
+        "since": since_dt.date().isoformat() if since_dt else None,
+        "until": until_dt.date().isoformat() if until_dt else None,
+        "days_out": days_out,
+        "days_left": days_left,
+        "total_days": days_out + (days_left or 0),
+        "basis": basis,
+        "source": source,
+        "url": url,
+        "note": note,
+    }
+
+
+def _sort_injuries(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    rows.sort(
+        key=lambda row: (
+            -_SEVERITY_RANK.get(str(row.get("severity")), 0),
+            -int(row.get("total_days") or 0),
+            str(row.get("player") or ""),
+        )
+    )
+    return rows
+
+
+def load_football_injuries(
+    spec: Competition,
+    fixtures: list[dict[str, Any]],
+    now: datetime,
+    warnings: list[str],
+    max_age: int = 6 * 3600,
+) -> list[dict[str, Any]]:
+    """Current injuries for the clubs in the upcoming fixtures."""
+    url = TRANSFERMARKT_INJURIES.get(spec.key)
+    if not url or not fixtures:
+        return []
+    fixture_teams = {event["home"] for event in fixtures} | {event["away"] for event in fixtures}
+    cache = _load_injury_cache()
+    cache_key = f"tm:{spec.key}"
+    cached = cache.get(cache_key) or {}
+    timestamp = time.time()
+    rows = list(cached.get("rows") or [])
+    if timestamp - float(cached.get("fetched") or 0) > max_age:
+        try:
+            rows = parse_transfermarkt_injuries(fetch_text(url))
+        except Exception as exc:  # noqa: BLE001 - injuries are best effort
+            warnings.append(f"{spec.name} injuries: {exc}")
+        else:
+            if rows:
+                cache[cache_key] = {"fetched": timestamp, "rows": rows}
+                try:
+                    _save_injury_cache(cache)
+                except OSError as exc:
+                    warnings.append(f"injury cache: {exc}")
+
+    if not rows:
+        return []
+    matches = match_injury_teams(fixture_teams, rows)
+    if not matches:
+        warnings.append(f"{spec.name} injuries: no club matched")
+        return []
+
+    out: list[dict[str, Any]] = []
+    for row in rows:
+        team = matches.get(str(row.get("team") or ""))
+        if not team:
+            continue
+        out.append(
+            _injury_record(
+                player=str(row.get("player") or ""),
+                team=team,
+                status="Injured",
+                injury=str(row.get("injury") or "Unknown injury"),
+                since=row.get("since"),
+                until=row.get("until"),
+                url=str(row.get("url") or ""),
+                source=str(row.get("source") or "Transfermarkt"),
+                basis="injury",
+                now=now,
+            )
+        )
+    return _sort_injuries([row for row in out if row["player"]])
+
+
+def parse_nba_injuries(data: dict[str, Any]) -> list[dict[str, Any]]:
+    """Flatten ESPN's team-grouped NBA injury report."""
+    rows: list[dict[str, Any]] = []
+    for block in data.get("injuries") or []:
+        team = str(block.get("displayName") or "").strip()
+        team_id = str(block.get("id") or "").strip()
+        for entry in block.get("injuries") or []:
+            athlete = entry.get("athlete") or {}
+            player = str(athlete.get("displayName") or athlete.get("fullName") or "").strip()
+            status = str(entry.get("status") or "Out").strip()
+            if not player or status.lower() in ("suspension", "suspended"):
+                continue
+            details = entry.get("details") or {}
+            pieces = [
+                str(details.get(key) or "").strip()
+                for key in ("side", "type", "detail")
+            ]
+            pieces = [
+                piece for piece in pieces
+                if piece and piece.lower() not in ("none", "not specified")
+            ]
+            injury = " ".join(pieces) or "Undisclosed"
+            athlete_id = str(athlete.get("id") or "").strip()
+            rows.append(
+                {
+                    "player": player,
+                    "team": team,
+                    "team_id": team_id or str((athlete.get("team") or {}).get("id") or ""),
+                    "status": status,
+                    "injury": injury,
+                    "since": entry.get("date"),
+                    "until": details.get("returnDate"),
+                    "url": (
+                        f"https://www.espn.com/nba/player/_/id/{athlete_id}"
+                        if athlete_id
+                        else "https://www.espn.com/nba/injuries"
+                    ),
+                    "source": "ESPN",
+                    "note": str(entry.get("shortComment") or "").strip(),
+                }
+            )
+    return rows
+
+
+def load_nba_injuries(
+    team_ids: set[str],
+    now: datetime,
+    warnings: list[str],
+    max_age: int = 6 * 3600,
+) -> list[dict[str, Any]]:
+    """NBA injury report, limited to teams with an upcoming fixture."""
+    cache = _load_injury_cache()
+    cache_key = f"nba:{_nba_season_year(now)}"
+    cached = cache.get(cache_key) or {}
+    timestamp = time.time()
+    rows = list(cached.get("rows") or [])
+    if timestamp - float(cached.get("fetched") or 0) > max_age:
+        try:
+            data = fetch_json(f"{ESPN}/basketball/nba/injuries")
+            rows = parse_nba_injuries(data if isinstance(data, dict) else {})
+        except Exception as exc:  # noqa: BLE001 - injuries are best effort
+            warnings.append(f"NBA injuries: {exc}")
+        else:
+            if rows:
+                cache[cache_key] = {"fetched": timestamp, "rows": rows}
+                try:
+                    _save_injury_cache(cache)
+                except OSError as exc:
+                    warnings.append(f"injury cache: {exc}")
+
+    out = [
+        _injury_record(
+            player=str(row.get("player") or ""),
+            team=str(row.get("team") or ""),
+            status=str(row.get("status") or "Out"),
+            injury=str(row.get("injury") or "Undisclosed"),
+            since=row.get("since"),
+            until=row.get("until"),
+            url=str(row.get("url") or ""),
+            source=str(row.get("source") or "ESPN"),
+            basis="report",
+            note=str(row.get("note") or ""),
+            now=now,
+        )
+        for row in rows
+        if str(row.get("team_id") or "") in team_ids
+    ]
+    return _sort_injuries([row for row in out if row["player"]])
 
 
 def _parse_date(value: Any) -> datetime | None:
@@ -1247,16 +1678,24 @@ def build_competition(spec: Competition, now: datetime) -> dict[str, Any]:
     fixtures = _fixtures_for(events, spec, now)
 
     stats_window = 5 if spec.sport == "basketball" else 10
+    fixture_team_ids = {
+        team_id
+        for event in fixtures
+        for team_id in (event.get("home_id"), event.get("away_id"))
+        if team_id
+    }
     top_scorers: dict[str, dict[str, Any]] = {}
     if fixtures and spec.sport == "basketball":
         fixture_teams = {event["home"] for event in fixtures} | {event["away"] for event in fixtures}
         enrich_nba_fouls(matches, fixture_teams, warnings, window=stats_window)
-        top_scorers = load_nba_top_scorers(
-            {event.get("home_id") or "" for event in fixtures}
-            | {event.get("away_id") or "" for event in fixtures},
-            now,
-            warnings,
-        )
+        top_scorers = load_nba_top_scorers(fixture_team_ids, now, warnings)
+
+    injuries: list[dict[str, Any]] = []
+    if fixtures:
+        if spec.sport == "basketball":
+            injuries = load_nba_injuries(fixture_team_ids, now, warnings)
+        else:
+            injuries = load_football_injuries(spec, fixtures, now, warnings)
 
     if not matches:
         raise DataError(f"no completed {spec.name} results in the last {spec.lookback_days} days")
@@ -1347,6 +1786,7 @@ def build_competition(spec: Competition, now: datetime) -> dict[str, Any]:
         "validation": validation,
         "updated_at": utcnow(),
         "fixtures": fixture_rows,
+        "injuries": injuries,
         "warnings": warnings,
     }
 
@@ -1403,7 +1843,8 @@ def build_snapshot(
             "Football: time-weighted Dixon-Coles Poisson. NBA: time-weighted "
             "point-margin ratings, projected score and top scorer. Corners/fouls "
             "and made 3s are recent averages; scorers are goal-share estimates. "
-            "No lineups, injuries or market prices."
+            "Injuries are shown separately and are not model inputs. "
+            "No lineups or market prices."
         ),
         "competitions": competitions,
         "warnings": warnings,

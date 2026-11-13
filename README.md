@@ -63,6 +63,26 @@ Serie A, La Liga, Champions League and the NBA.
 - **Fixtures:** only matches that have not started, within the next 14 days,
   soonest first.
 
+## Injury report
+
+A separate chart lists players unavailable for the clubs in the upcoming
+fixtures: player, club, injury, status, days out, expected return date and a
+short/medium/long absence estimate. It is **not** an input to the win model.
+
+- **Football:** [Transfermarkt's injury tables](https://www.transfermarkt.us)
+  for Serie A, La Liga and the Champions League. The page provides the injury
+  type, the date it started and the expected return. ESPN does not publish a
+  soccer injury feed.
+- **NBA:** ESPN's league injury report, including status (`Out`,
+  `Day-To-Day`), body part, expected return and the latest report note.
+- **Severity:** based on the expected time remaining (≤7 days short, 8–28
+  medium, >28 long); without a return date it falls back to the injury text.
+  It is an absence estimate, not a medical diagnosis.
+- **Clubs:** Transfermarkt club names are normalised to the ESPN names used in
+  the fixtures; only clubs playing in the next 14 days are shown.
+- **Caching:** injury feeds refresh every 6 hours and are stored in
+  `data/injuries.json`, so a temporary block does not remove the last report.
+
 ## Deploy on Render
 
 The repo includes `render.yaml`. In Render: **New + → Blueprint**, pick the

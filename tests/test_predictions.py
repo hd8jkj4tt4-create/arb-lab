@@ -8,19 +8,25 @@ from predictions import (
     NbaModel,
     ORDER,
     _fixtures_for,
+    _injury_record,
     _nba_season_year,
     _parse_events,
     build_matches,
     fit_football,
     fit_nba,
     form_string,
+    injury_severity,
+    match_injury_teams,
     month_keys,
     normal_cdf,
+    parse_nba_injuries,
+    parse_transfermarkt_injuries,
     probable_scorers,
     projected_stats,
     recent_results,
     score_matrix,
     team_averages,
+    team_match_score,
     validate_football,
 )
 from providers import DemoProvider, TheOddsAPIProvider
@@ -417,6 +423,131 @@ class OddsApiMappingTests(unittest.TestCase):
         self.assertIsNotNone(event)
         self.assertEqual(event.league, "Champions League")
         self.assertEqual(event.codes(), ["1", "X", "2"])
+
+
+class InjuryTests(unittest.TestCase):
+    def test_transfermarkt_rows_keep_since_and_return(self):
+        html = """
+        <table class="items"><tbody>
+        <tr class="odd"><td><table class="inline-table">
+          <tr><td><img title="Marcus Thuram" /></td>
+          <td class="hauptlink"><a title="Marcus Thuram" href="/marcus-thuram/profil/spieler/318528">Marcus Thuram</a></td></tr>
+          <tr><td>Centre-Forward</td></tr>
+        </table></td>
+        <td class="zentriert"><a title="Inter Milan" href="/inter-mailand/startseite/verein/46">Inter</a></td>
+        <td class="zentriert">29</td><td class="zentriert">France</td>
+        <td class="links">Hamstring injury</td>
+        <td class="zentriert">Nov 9, 2026</td><td class="zentriert">Dec 1, 2026</td>
+        <td class="rechts">€50.00M</td></tr>
+        <tr class="even"><td><table class="inline-table">
+          <tr><td><img title="Adam Marusic" /></td>
+          <td class="hauptlink"><a title="Adam Marusic" href="/adam-marusic/profil/spieler/239802">Adam Marusic</a></td></tr>
+          <tr><td>Right-Back</td></tr>
+        </table></td>
+        <td class="zentriert"><a title="SS Lazio" href="/lazio-rom/startseite/verein/398">Lazio</a></td>
+        <td class="zentriert">34</td><td class="zentriert">Montenegro</td>
+        <td class="links">muscular problems</td>
+        <td class="zentriert">Nov 12, 2026</td><td class="zentriert"></td>
+        <td class="rechts">€2.50M</td></tr>
+        </tbody></table>
+        """
+        rows = parse_transfermarkt_injuries(html)
+        self.assertEqual(len(rows), 2)
+        self.assertEqual(rows[0]["player"], "Marcus Thuram")
+        self.assertEqual(rows[0]["team"], "Inter Milan")
+        self.assertEqual(rows[0]["injury"], "Hamstring injury")
+        self.assertEqual(rows[0]["since"], "2026-11-09")
+        self.assertEqual(rows[0]["until"], "2026-12-01")
+        self.assertTrue(rows[0]["url"].startswith("https://www.transfermarkt.us/"))
+        self.assertIsNone(rows[1]["until"])
+
+    def test_team_aliases_match_espn_names(self):
+        self.assertEqual(team_match_score("Internazionale", "Inter Milan"), 1.0)
+        self.assertEqual(team_match_score("Alavés", "Deportivo Alavés"), 1.0)
+        self.assertEqual(team_match_score("Espanyol", "RCD Espanyol Barcelona"), 1.0)
+        self.assertEqual(team_match_score("Bodo/Glimt", "FK Bodø/Glimt"), 1.0)
+        self.assertLess(team_match_score("AC Milan", "Inter Milan"), 0.6)
+        matches = match_injury_teams(
+            {"AC Milan", "Napoli", "LASK Linz"},
+            [
+                {"team": "AC Milan"},
+                {"team": "SSC Napoli"},
+                {"team": "LASK"},
+                {"team": "Inter Milan"},
+            ],
+        )
+        self.assertEqual(matches["AC Milan"], "AC Milan")
+        self.assertEqual(matches["SSC Napoli"], "Napoli")
+        self.assertEqual(matches["LASK"], "LASK Linz")
+        self.assertNotIn("Inter Milan", matches)
+
+    def test_severity_uses_return_then_injury_type(self):
+        self.assertEqual(injury_severity("Knock", 4), "short")
+        self.assertEqual(injury_severity("Hamstring injury", 17), "medium")
+        self.assertEqual(injury_severity("Hamstring injury", 45), "long")
+        self.assertEqual(injury_severity("Cruciate ligament tear", None), "long")
+        self.assertEqual(injury_severity("Muscle fatigue", None), "short")
+        self.assertEqual(injury_severity("Hamstring injury", None), "medium")
+        self.assertEqual(injury_severity("unknown injury", None), "unknown")
+
+    def test_injury_record_counts_elapsed_and_remaining(self):
+        record = _injury_record(
+            player="Player",
+            team="Team",
+            status="Injured",
+            injury="Hamstring injury",
+            since="2026-11-01",
+            until="2026-11-20",
+            url="",
+            source="Transfermarkt",
+            basis="injury",
+            now=NOW,
+        )
+        self.assertEqual(record["days_out"], 10)
+        self.assertEqual(record["days_left"], 9)
+        self.assertEqual(record["total_days"], 19)
+        self.assertEqual(record["severity"], "medium")
+
+    def test_nba_injuries_are_flattened_and_suspensions_skipped(self):
+        data = {
+            "injuries": [
+                {
+                    "id": "1",
+                    "displayName": "Atlanta Hawks",
+                    "injuries": [
+                        {
+                            "status": "Out",
+                            "date": "2026-11-13T00:06Z",
+                            "athlete": {
+                                "id": "538842",
+                                "displayName": "Mouhamed Gueye",
+                            },
+                            "details": {
+                                "side": "Left",
+                                "type": "Foot",
+                                "detail": "Fracture",
+                                "returnDate": "2026-12-12",
+                            },
+                            "shortComment": "Gueye (foot) is progressing.",
+                        },
+                        {
+                            "status": "Suspension",
+                            "date": "2026-11-12T00:00Z",
+                            "athlete": {"id": "2", "displayName": "Suspended Player"},
+                            "details": {},
+                        },
+                    ],
+                }
+            ]
+        }
+        rows = parse_nba_injuries(data)
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["player"], "Mouhamed Gueye")
+        self.assertEqual(rows[0]["team"], "Atlanta Hawks")
+        self.assertEqual(rows[0]["team_id"], "1")
+        self.assertEqual(rows[0]["injury"], "Left Foot Fracture")
+        self.assertEqual(rows[0]["until"], "2026-12-12")
+        self.assertIn("espn.com/nba/player", rows[0]["url"])
 
 
 class DemoProviderTests(unittest.TestCase):

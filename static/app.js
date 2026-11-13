@@ -429,6 +429,119 @@ function predRow(fixture) {
   </div>`;
 }
 
+/* ------------------------------------------------------------- injuries */
+const injuryRank = { long: 3, medium: 2, short: 1, unknown: 0 };
+
+function shortDate(iso) {
+  if (!iso) return '—';
+  const d = new Date(`${iso}T00:00:00Z`);
+  if (Number.isNaN(d.getTime())) return '—';
+  return d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short' });
+}
+
+function injuryRow(row, maxDays, showComp) {
+  const severity = row.severity || 'unknown';
+  const total = Math.max(0, Number(row.total_days) || 0);
+  const width = clamp((total / Math.max(7, maxDays)) * 100, 4, 100);
+  const daysOut = Number(row.days_out) || 0;
+  const outLabel = `${daysOut}d ${row.basis === 'report' ? 'reported' : 'out'}`;
+  const left = row.days_left == null
+    ? 'return unknown'
+    : Number(row.days_left) === 0
+      ? 'due back'
+      : `back in ${Number(row.days_left)}d`;
+  const competition = showComp ? `<em class="inj-comp">${esc(row.competition)}</em>` : '';
+  const source = row.url
+    ? `<a href="${esc(row.url)}" target="_blank" rel="noopener noreferrer">${esc(row.player)}</a>`
+    : esc(row.player);
+  const tip = [
+    `${row.player} — ${row.team}`,
+    `${row.injury} · ${row.status}`,
+    `${outLabel}${row.since ? ` (since ${shortDate(row.since)})` : ''} · ${left}`,
+    row.note || '',
+  ].filter(Boolean).join('\n');
+  return `<div class="inj-row" title="${esc(tip)}">
+    <div class="inj-main">
+      <b>${source}</b>${competition}
+      <span>${esc(row.team)} · ${esc(row.injury)}</span>
+    </div>
+    <div class="inj-track"><i class="inj-bar ${esc(severity)}" style="width:${width.toFixed(2)}%"></i></div>
+    <div class="inj-time"><b>${esc(outLabel)}</b><span>${esc(row.status)} · ${esc(severity)}</span></div>
+    <div class="inj-ret"><b>${esc(left)}</b><span>${row.until ? `until ${shortDate(row.until)}` : 'no date'}</span></div>
+  </div>`;
+}
+
+function pickInjuryRows(rows, limit) {
+  const buckets = { long: [], medium: [], short: [], unknown: [] };
+  rows.forEach((row) => {
+    const severity = row.severity || 'unknown';
+    (buckets[severity] || buckets.unknown).push(row);
+  });
+  const picked = [];
+  const usedTeams = new Set();
+  const take = (bucket, count) => {
+    let added = 0;
+    for (const row of bucket) {
+      if (added >= count || picked.length >= limit) break;
+      if (usedTeams.has(row.team)) continue;
+      picked.push(row);
+      usedTeams.add(row.team);
+      added += 1;
+    }
+  };
+  const share = Math.ceil(limit / 3);
+  ['long', 'medium', 'short', 'unknown'].forEach((severity) => take(buckets[severity], share));
+  if (picked.length < limit) {
+    for (const row of rows) {
+      if (picked.length >= limit) break;
+      if (usedTeams.has(row.team)) continue;
+      picked.push(row);
+      usedTeams.add(row.team);
+    }
+  }
+  return picked.slice(0, limit);
+}
+
+function renderInjuries(comps) {
+  const section = $('#injuriesSection');
+  const chart = $('#injChart');
+  const allList = $('#injAllList');
+  if (!comps || !comps.length) {
+    section.classList.add('hidden');
+    return;
+  }
+  const rows = comps.flatMap((comp) => (comp.injuries || []).map((row) => ({
+    ...row,
+    competition: comp.name,
+  })));
+  if (!rows.length) {
+    section.classList.add('hidden');
+    return;
+  }
+  section.classList.remove('hidden');
+  rows.sort((a, b) => (
+    (injuryRank[b.severity] || 0) - (injuryRank[a.severity] || 0)
+    || (Number(b.total_days) || 0) - (Number(a.total_days) || 0)
+    || String(a.player).localeCompare(String(b.player))
+  ));
+  const showComp = S.predComp === 'all';
+  const top = showComp
+    ? comps.flatMap((comp) => pickInjuryRows(
+      rows.filter((row) => row.competition === comp.name),
+      6,
+    ))
+    : pickInjuryRows(rows, 16);
+  const maxDays = Math.max(...top.map((row) => Number(row.total_days) || 0), 7);
+  chart.innerHTML = top.map((row) => injuryRow(row, maxDays, showComp)).join('');
+  $('#injAllSummary').textContent = `All ${rows.length} injuries`;
+  allList.innerHTML = rows.map((row) => `<div class="inj-all-row">
+    <span>${esc(row.player)}</span>
+    <em>${esc(row.team)} · ${esc(row.injury)}</em>
+    <b>${Number(row.days_out) || 0}d out · ${row.days_left == null ? 'return unknown' : `back in ${Number(row.days_left)}d`}</b>
+  </div>`).join('');
+  $('#injUpdated').textContent = `${rows.length} players${showComp ? ' · all competitions' : ` · ${comps[0].name}`}`;
+}
+
 function predGroup(comp) {
   const validation = comp.validation;
   const holdout = validation
@@ -461,6 +574,7 @@ function renderPredictions() {
   if (S.predLoading && (!data || data.loading)) {
     groups.innerHTML = '';
     $('#predChips').innerHTML = '';
+    $('#injuriesSection').classList.add('hidden');
     empty.classList.remove('hidden');
     empty.querySelector('b').textContent = 'Loading the win model…';
     empty.querySelector('span').textContent = 'Downloading previous results from ESPN. This can take a few seconds on first start.';
@@ -471,6 +585,7 @@ function renderPredictions() {
   if (S.predError || !data || data.loading) {
     groups.innerHTML = '';
     $('#predChips').innerHTML = '';
+    $('#injuriesSection').classList.add('hidden');
     empty.classList.remove('hidden');
     empty.querySelector('b').textContent = S.predError ? 'Win model unavailable.' : 'Win model is loading…';
     empty.querySelector('span').textContent = S.predError || 'The first ESPN download is still running. The page will update automatically.';
@@ -497,6 +612,7 @@ function renderPredictions() {
   });
   $('#predChips').innerHTML = chips.join('');
   groups.innerHTML = shown.map(predGroup).join('');
+  renderInjuries(shown);
 
   const hasFixtures = shown.some((comp) => (comp.fixtures || []).length);
   empty.classList.toggle('hidden', hasFixtures);
